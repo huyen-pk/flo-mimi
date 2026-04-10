@@ -1,0 +1,8 @@
+clickhouse-connect==0.8.15
+dagster==1.10.5
+dagster-webserver==1.10.5
+dbt-core==1.9.0
+dbt-postgres==1.9.0
+minio==7.2.15
+psycopg[binary]==3.2.5
+requests==2.32.3

@@ -1,0 +1,38 @@
+logger:
+  level: TRACE
+  add_timestamp: true
+
+input:
+  kafka_franz:
+    seed_brokers:
+      - redpanda:9092
+    topics:
+      - email_events_raw
+      - analytics_events_raw
+    consumer_group: stream-loader
+
+output:
+  broker:
+    outputs:
+      - aws_s3:
+          bucket: data-lake
+          path: 'bronze/${!meta("kafka_topic")}/captured_at=${!timestamp_unix()}/${!uuid_v4()}.json'
+          endpoint: http://minio:9000
+          region: us-east-1
+          force_path_style_urls: true
+          credentials:
+            id: ${MINIO_ROOT_USER}
+            secret: ${MINIO_ROOT_PASSWORD}
+          content_type: application/json
+          batching:
+            count: 1
+      - http_client:
+          url: 'http://clickhouse:8123/?query=INSERT+INTO+serving.raw_payload+FORMAT+JSONEachRow&user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}'
+          verb: POST
+          headers:
+            Content-Type: application/json
+          batching:
+            count: 1
+        processors:
+          - bloblang: 'root = {"payload": content()}'
+ 

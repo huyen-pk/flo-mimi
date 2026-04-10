@@ -1,0 +1,17 @@
+name: data_platform
+version: 1.0.0
+config-version: 2
+
+profile: appdb
+
+model-paths:
+  - models
+
+models:
+  data_platform:
+    staging:
+      +schema: analytics
+      +materialized: view
+    marts:
+      +schema: analytics
+      +materialized: table

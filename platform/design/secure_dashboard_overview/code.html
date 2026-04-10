@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Private Curator | Email Intelligence</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#ffdad6",
+                        "inverse-primary": "#c9bfff",
+                        "surface-container-highest": "#e2e2e5",
+                        "on-secondary-fixed": "#191932",
+                        "primary-fixed": "#e5deff",
+                        "on-secondary-container": "#60607d",
+                        "surface-container-low": "#f3f3f6",
+                        "on-primary-fixed": "#1b0063",
+                        "surface-variant": "#e2e2e5",
+                        "on-tertiary-fixed": "#290055",
+                        "on-primary-container": "#f4eeff",
+                        "on-tertiary-container": "#f8edff",
+                        "on-surface": "#1a1c1e",
+                        "surface-dim": "#d9dadd",
+                        "on-primary-fixed-variant": "#4500d8",
+                        "surface-container-high": "#e8e8eb",
+                        "primary": "#5427e6",
+                        "on-surface-variant": "#484556",
+                        "surface-tint": "#5d36ef",
+                        "on-secondary": "#ffffff",
+                        "tertiary": "#68409f",
+                        "primary-fixed-dim": "#c9bfff",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-bright": "#f9f9fc",
+                        "on-error": "#ffffff",
+                        "on-background": "#1a1c1e",
+                        "surface": "#f9f9fc",
+                        "on-tertiary": "#ffffff",
+                        "outline-variant": "#c9c4d9",
+                        "inverse-surface": "#2f3133",
+                        "tertiary-fixed": "#eddcff",
+                        "tertiary-container": "#8159ba",
+                        "inverse-on-surface": "#f0f0f3",
+                        "secondary-fixed": "#e2dfff",
+                        "primary-container": "#6d4aff",
+                        "secondary": "#5c5c78",
+                        "on-secondary-fixed-variant": "#44445f",
+                        "on-tertiary-fixed-variant": "#593090",
+                        "tertiary-fixed-dim": "#d7baff",
+                        "on-primary": "#ffffff",
+                        "background": "#f9f9fc",
+                        "error": "#ba1a1a",
+                        "outline": "#797588",
+                        "secondary-container": "#dfdcfe",
+                        "on-error-container": "#93000a",
+                        "surface-container": "#edeef1",
+                        "secondary-fixed-dim": "#c5c3e4"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Manrope"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f9f9fc; color: #1a1c1e; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24; }
+        .glass-nav { backdrop-filter: blur(20px); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .asymmetric-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 2rem; }
+        @media (max-width: 1024px) { .asymmetric-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body class="bg-surface text-on-surface antialiased overflow-x-hidden">
+<!-- SideNavBar Component -->
+<aside class="h-screen w-64 fixed left-0 top-0 overflow-y-auto flex flex-col border-r-0 bg-slate-50 z-50">
+<div class="px-6 py-8">
+<div class="flex items-center gap-3 mb-10">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary">
+<span class="material-symbols-outlined text-lg" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<h1 class="text-xl font-bold tracking-tight text-violet-800">The Curator</h1>
+</div>
+<nav class="space-y-1">
+<!-- Dashboard Active -->
+<a class="flex items-center gap-3 px-4 py-3 bg-white text-violet-700 font-semibold rounded-lg shadow-sm transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="font-label text-sm">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-200/50 transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="send">send</span>
+<span class="font-label text-sm">Campaigns</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-200/50 transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-label text-sm">Subscribers</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-200/50 transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="analytics">analytics</span>
+<span class="font-label text-sm">Analytics</span>
+</a>
+</nav>
+</div>
+<div class="mt-auto px-6 py-8 space-y-1 bg-slate-100/50">
+<a class="flex items-center gap-3 px-4 py-2 text-slate-600 hover:bg-slate-200/50 transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-label text-sm text-slate-500">Settings</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 text-slate-600 hover:bg-slate-200/50 transition-all duration-200 ease-in-out hover:pl-2" href="#">
+<span class="material-symbols-outlined" data-icon="shield">shield</span>
+<span class="font-label text-sm text-slate-500">Security</span>
+</a>
+<div class="mt-4 pt-4 border-t border-slate-200 flex items-center gap-3">
+<div class="w-8 h-8 rounded-full overflow-hidden bg-primary-fixed">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="minimalist professional portrait of a tech executive against a soft lavender backdrop" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAefjSQ58RRtVCFelPjBHs6C3J3b352P-XgX611AUq0-haKqTTkoM1BZ8eqck9Z0tflRMQrj5W-rVW8UdFoyWGaAJjCt0DnlTH2iiollBRjtWwi-LkmXpiaDnyWiZLbKeRelz49jxrGCZEuuSbi-pIuuAsbkKmMqd6-lNMfy-dZEFi_Hby3xGo-5s89QhoJEHpBUFA_O8HXXj2rmvwJ3NPZ_vyekRfAaYqMTsNJLOFgyn6e2vpkGbxFHq2OBceVj1iPdXhAf5EXu1IJ"/>
+</div>
+<div>
+<p class="text-xs font-bold text-on-surface">Admin</p>
+<p class="text-[10px] text-slate-500">Fortified Serenity</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- TopNavBar Component -->
+<header class="sticky top-0 h-16 z-40 bg-white/80 backdrop-blur-xl flex justify-between items-center w-full px-8 ml-64 max-w-[calc(100%-16rem)] shadow-sm shadow-violet-900/5">
+<div class="flex items-center flex-1 max-w-xl">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-slate-50 border-none rounded-lg text-sm focus:ring-2 focus:ring-violet-500/20 placeholder-slate-400" placeholder="Search secure archives..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-1 text-slate-500">
+<button class="p-2 hover:text-violet-600 transition-colors">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 hover:text-violet-600 transition-colors">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+</div>
+<div class="h-8 w-[1px] bg-slate-200"></div>
+<div class="flex items-center gap-3">
+<div class="text-right">
+<p class="text-xs font-semibold">Active Session</p>
+<p class="text-[10px] text-tertiary font-medium">Encrypted Node: 04X-88</p>
+</div>
+<div class="w-3 h-3 rounded-full bg-emerald-500 ring-4 ring-emerald-100"></div>
+</div>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="ml-64 p-8 min-h-screen bg-surface">
+<!-- Hero Section: Editorial Headline -->
+<header class="mb-12 max-w-4xl">
+<h2 class="font-headline text-5xl font-extrabold tracking-tight text-on-surface mb-4 leading-tight">
+                Your communication <br/> <span class="text-primary italic">Intelligence Hub.</span>
+</h2>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 bg-secondary-fixed px-3 py-1 rounded-full text-on-secondary-fixed text-xs font-semibold">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">verified_user</span>
+                    All systems secure
+                </div>
+<p class="text-on-surface-variant text-sm font-medium">Last campaign sync: 4 minutes ago</p>
+</div>
+</header>
+<!-- High Level Metrics: Tonal Layering Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+<div class="bg-surface-container-lowest p-8 rounded-lg shadow-sm shadow-violet-900/5 relative overflow-hidden group">
+<div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+<span class="material-symbols-outlined text-6xl" data-icon="group">group</span>
+</div>
+<p class="text-on-surface-variant text-sm font-medium mb-1">Total Subscribers</p>
+<h3 class="font-headline text-4xl font-extrabold text-on-surface mb-4">124,802</h3>
+<div class="flex items-center gap-2 text-emerald-600 text-sm font-bold">
+<span class="material-symbols-outlined text-sm">trending_up</span>
+                    +12.4% this month
+                </div>
+</div>
+<div class="bg-surface-container-lowest p-8 rounded-lg shadow-sm shadow-violet-900/5 relative overflow-hidden group border-t-4 border-primary">
+<div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+<span class="material-symbols-outlined text-6xl" data-icon="mail">mail</span>
+</div>
+<p class="text-on-surface-variant text-sm font-medium mb-1">Avg. Open Rate</p>
+<h3 class="font-headline text-4xl font-extrabold text-on-surface mb-4">42.8%</h3>
+<div class="flex items-center gap-2 text-primary text-sm font-bold">
+<span class="material-symbols-outlined text-sm">bolt</span>
+                    6% above industry avg
+                </div>
+</div>
+<div class="bg-surface-container-lowest p-8 rounded-lg shadow-sm shadow-violet-900/5 relative overflow-hidden group">
+<div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+<span class="material-symbols-outlined text-6xl" data-icon="ads_click">ads_click</span>
+</div>
+<p class="text-on-surface-variant text-sm font-medium mb-1">Click Through Rate</p>
+<h3 class="font-headline text-4xl font-extrabold text-on-surface mb-4">8.12%</h3>
+<div class="flex items-center gap-2 text-on-surface-variant text-sm font-medium">
+<span class="material-symbols-outlined text-sm">history</span>
+                    Stable over 90 days
+                </div>
+</div>
+</div>
+<!-- Dashboard Body: Asymmetric Bento Grid -->
+<div class="asymmetric-grid">
+<!-- Left Column: Performance Analytics -->
+<div class="space-y-8">
+<section class="bg-surface-container-low p-8 rounded-lg">
+<div class="flex justify-between items-center mb-8">
+<h4 class="font-headline text-xl font-bold">Campaign Performance</h4>
+<div class="flex gap-2">
+<button class="px-3 py-1 bg-white text-xs font-semibold rounded-md shadow-sm border border-slate-200">Daily</button>
+<button class="px-3 py-1 text-xs font-semibold text-slate-500">Weekly</button>
+</div>
+</div>
+<div class="h-64 flex items-end justify-between gap-4 px-2">
+<!-- Mockup Graph -->
+<div class="flex-1 bg-primary/20 rounded-t-sm hover:bg-primary transition-colors relative group h-[40%]">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-on-surface text-white text-[10px] py-1 px-2 rounded hidden group-hover:block">12.4k</div>
+</div>
+<div class="flex-1 bg-primary/20 rounded-t-sm hover:bg-primary transition-colors relative group h-[65%]"></div>
+<div class="flex-1 bg-primary/40 rounded-t-sm hover:bg-primary transition-colors relative group h-[55%]"></div>
+<div class="flex-1 bg-primary/20 rounded-t-sm hover:bg-primary transition-colors relative group h-[85%]"></div>
+<div class="flex-1 bg-primary/30 rounded-t-sm hover:bg-primary transition-colors relative group h-[45%]"></div>
+<div class="flex-1 bg-primary/60 rounded-t-sm hover:bg-primary transition-colors relative group h-[75%]"></div>
+<div class="flex-1 bg-primary rounded-t-sm relative group h-[95%]">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-on-surface text-white text-[10px] py-1 px-2 rounded">28.9k</div>
+</div>
+</div>
+<div class="flex justify-between mt-4 px-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+<span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+</div>
+</section>
+<div class="grid grid-cols-2 gap-6">
+<div class="bg-surface-container-lowest p-6 rounded-lg shadow-sm border border-slate-100">
+<div class="flex items-center gap-3 mb-4">
+<div class="w-10 h-10 rounded bg-tertiary-fixed flex items-center justify-center text-tertiary">
+<span class="material-symbols-outlined">security</span>
+</div>
+<h5 class="font-bold text-sm">DMARC Status</h5>
+</div>
+<p class="text-2xl font-bold mb-2">Verified</p>
+<p class="text-xs text-on-surface-variant leading-relaxed">Your sending domain is fully authenticated and protected against spoofing.</p>
+</div>
+<div class="bg-primary p-6 rounded-lg shadow-lg shadow-primary/20 text-on-primary">
+<h5 class="font-bold text-sm mb-4">Pro Plan Active</h5>
+<p class="text-2xl font-bold mb-2">Next Billing</p>
+<p class="text-xs opacity-80 mb-6">October 24, 2023</p>
+<button class="w-full py-2 bg-white/10 hover:bg-white/20 transition-colors rounded-md text-xs font-bold border border-white/20">Manage Subscription</button>
+</div>
+</div>
+</div>
+<!-- Right Column: Recent Activity & Top Segments -->
+<div class="bg-surface-container-low p-8 rounded-lg flex flex-col">
+<div class="flex items-center justify-between mb-8">
+<h4 class="font-headline text-xl font-bold">Recent Activity</h4>
+<span class="material-symbols-outlined text-slate-400 cursor-pointer">more_horiz</span>
+</div>
+<div class="space-y-6 flex-1">
+<div class="flex gap-4">
+<div class="w-2 h-2 mt-2 rounded-full bg-primary flex-shrink-0"></div>
+<div>
+<p class="text-sm font-semibold">Weekly Newsletter #42 Sent</p>
+<p class="text-xs text-on-surface-variant mt-1">To 112,400 recipients • Open rate: 32%</p>
+<p class="text-[10px] text-slate-400 mt-2 font-medium">2 HOURS AGO</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-2 h-2 mt-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
+<div>
+<p class="text-sm font-semibold">Security Audit Passed</p>
+<p class="text-xs text-on-surface-variant mt-1">Automated penetration test completed with zero vulnerabilities found.</p>
+<p class="text-[10px] text-slate-400 mt-2 font-medium">5 HOURS AGO</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-2 h-2 mt-2 rounded-full bg-slate-300 flex-shrink-0"></div>
+<div>
+<p class="text-sm font-semibold">Database Backup Successful</p>
+<p class="text-xs text-on-surface-variant mt-1">Full mirror sync to encrypted vault completed.</p>
+<p class="text-[10px] text-slate-400 mt-2 font-medium">12 HOURS AGO</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-2 h-2 mt-2 rounded-full bg-primary flex-shrink-0"></div>
+<div>
+<p class="text-sm font-semibold">New Segment: "High Intent"</p>
+<p class="text-xs text-on-surface-variant mt-1">4,203 users automatically grouped based on last 30 days activity.</p>
+<p class="text-[10px] text-slate-400 mt-2 font-medium">YESTERDAY</p>
+</div>
+</div>
+</div>
+<div class="mt-12 pt-8 border-t border-slate-200/60">
+<h5 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">Top Growth Segments</h5>
+<div class="space-y-4">
+<div class="flex justify-between items-center">
+<span class="text-sm font-medium">United States</span>
+<div class="flex items-center gap-4">
+<div class="w-32 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+<div class="w-[85%] h-full bg-primary"></div>
+</div>
+<span class="text-xs font-bold">85%</span>
+</div>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-sm font-medium">United Kingdom</span>
+<div class="flex items-center gap-4">
+<div class="w-32 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+<div class="w-[62%] h-full bg-primary"></div>
+</div>
+<span class="text-xs font-bold">62%</span>
+</div>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-sm font-medium">Germany</span>
+<div class="flex items-center gap-4">
+<div class="w-32 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+<div class="w-[44%] h-full bg-primary"></div>
+</div>
+<span class="text-xs font-bold">44%</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Contextual FAB: Create Campaign -->
+<button class="fixed bottom-10 right-10 w-16 h-16 bg-primary rounded-full shadow-lg shadow-primary/40 flex items-center justify-center text-white hover:scale-105 transition-transform group">
+<span class="material-symbols-outlined text-3xl">add</span>
+<span class="absolute right-20 bg-inverse-surface text-inverse-on-surface text-xs font-bold px-4 py-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap shadow-xl">New Campaign</span>
+</button>
+</body></html>
