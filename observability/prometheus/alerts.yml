@@ -1,0 +1,51 @@
+groups:
+  - name: platform-observability
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"platform|event-gateway|mock-third-party-api|dagster-daemon|dagster-webserver|redpanda|stream-loader|clickhouse|trino|appdb-exporter|catalog-db-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Service {{ $labels.job }} is down
+          description: Prometheus has not been able to scrape {{ $labels.job }} for at least 2 minutes.
+
+      - alert: HighHttpErrorRate
+        expr: |
+          (
+            sum by (service) (rate(app_http_requests_total{status=~"5.."}[5m])) /
+            clamp_min(sum by (service) (rate(app_http_requests_total[5m])), 0.001)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated HTTP error rate for {{ $labels.service }}
+          description: HTTP 5xx responses exceeded 5% over the last 10 minutes.
+
+      - alert: DagsterOpFailures
+        expr: increase(dagster_op_runs_total{status="error"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Dagster op failures detected
+          description: One or more Dagster ops failed in the last 10 minutes.
+
+      - alert: KafkaPublishErrors
+        expr: increase(app_kafka_publish_total{status="error"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Event gateway publish errors detected
+          description: Kafka publish attempts failed in the last 10 minutes.
+
+      - alert: StreamLoaderOutputErrors
+        expr: increase(output_error[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Stream loader output errors detected
+          description: Redpanda Connect reported output errors in the last 10 minutes.

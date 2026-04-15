@@ -2,7 +2,7 @@ package bootstrap
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"platform/internal/domain/bootstrap"
 	"platform/internal/ports"
@@ -26,7 +26,7 @@ func (s Service) Load(ctx context.Context) (bootstrap.AppBootstrap, error) {
 	if s.analyticsRepo != nil {
 		analytics, err := s.analyticsRepo.LoadAnalytics(ctx)
 		if err != nil {
-			log.Printf("load analytics from clickhouse: %v", err)
+			slog.Default().Warn("load analytics from clickhouse", "error", err)
 		} else {
 			model.Analytics = analytics
 		}

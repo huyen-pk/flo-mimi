@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"platform/internal/domain/interactions"
+	"platform/internal/telemetry"
 )
 
 type HTTPEventGateway struct {
@@ -55,12 +58,16 @@ func (g *HTTPEventGateway) postJSON(ctx context.Context, path string, body map[s
 		return fmt.Errorf("build request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	telemetry.InjectHeaders(ctx, request.Header)
 
+	startedAt := time.Now()
 	response, err := g.client.Do(request)
 	if err != nil {
+		telemetry.ObserveOutboundHTTP("platform", "event-gateway", http.MethodPost, path, "error", time.Since(startedAt))
 		return fmt.Errorf("execute request: %w", err)
 	}
 	defer response.Body.Close()
+	telemetry.ObserveOutboundHTTP("platform", "event-gateway", http.MethodPost, path, strconv.Itoa(response.StatusCode), time.Since(startedAt))
 
 	if response.StatusCode >= http.StatusBadRequest {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(response.Body, 4096))

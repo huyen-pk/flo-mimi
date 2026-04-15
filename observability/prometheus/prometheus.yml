@@ -1,0 +1,93 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          - otel-collector:8888
+
+  - job_name: platform
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - platform:8081
+
+  - job_name: event-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - event-gateway:8000
+
+  - job_name: mock-third-party-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - mock-third-party-api:8010
+
+  - job_name: dagster-daemon
+    static_configs:
+      - targets:
+          - dagster-daemon:9108
+
+  - job_name: dagster-webserver
+    static_configs:
+      - targets:
+          - dagster-webserver:9109
+
+  - job_name: redpanda
+    metrics_path: /public_metrics
+    static_configs:
+      - targets:
+          - redpanda:9644
+
+  - job_name: stream-loader
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - stream-loader:4195
+
+  - job_name: clickhouse
+    metrics_path: /metrics
+    params:
+      user:
+        - default
+      password:
+        - clickhouse
+    static_configs:
+      - targets:
+          - clickhouse:8123
+
+  - job_name: trino
+    metrics_path: /metrics
+    http_headers:
+      X-Trino-User:
+        values:
+          - prometheus
+    static_configs:
+      - targets:
+          - trino:8080
+
+  - job_name: appdb-exporter
+    static_configs:
+      - targets:
+          - appdb-exporter:9187
+
+  - job_name: catalog-db-exporter
+    static_configs:
+      - targets:
+          - catalog-db-exporter:9187
+
+  - job_name: promtail
+    static_configs:
+      - targets:
+          - promtail:9080

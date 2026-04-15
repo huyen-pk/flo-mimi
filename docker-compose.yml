@@ -171,6 +171,8 @@ services:
     environment:
       APP_PORT: 8000
       REDPANDA_BROKERS: redpanda:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: event-gateway
     depends_on:
       redpanda:
         condition: service_healthy
@@ -196,6 +198,8 @@ services:
       APPDB_DSN: postgresql://${APPDB_USER:-analytics}:${APPDB_PASSWORD:-analytics}@appdb:5432/${APPDB_DB:-analytics}?sslmode=disable
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: platform
     depends_on:
       event-gateway:
         condition: service_healthy
@@ -236,6 +240,8 @@ services:
       context: ./mock-third-party-api
     environment:
       APP_PORT: 8010
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: mock-third-party-api
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health')\" || exit 1"]
       interval: 10s
@@ -269,6 +275,9 @@ services:
       DBT_USER: ${APPDB_USER:-analytics}
       DBT_PASSWORD: ${APPDB_PASSWORD:-analytics}
       DBT_SCHEMA: analytics
+      DAGSTER_METRICS_PORT: 9109
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: dagster-webserver
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -310,6 +319,9 @@ services:
       DBT_USER: ${APPDB_USER:-analytics}
       DBT_PASSWORD: ${APPDB_PASSWORD:-analytics}
       DBT_SCHEMA: analytics
+      DAGSTER_METRICS_PORT: 9108
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: dagster-daemon
     depends_on:
       dagster-webserver:
         condition: service_started
@@ -339,6 +351,117 @@ services:
       - lakehouse_net
       - serving_net
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otel-collector/config.yaml"]
+    volumes:
+      - ./observability/otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - observability_net
+      - ingress_net
+      - batch_net
+      - serving_net
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - observability_net
+      - ingress_net
+      - stream_net
+      - batch_net
+      - lakehouse_net
+      - serving_net
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - observability_net
+
+  loki:
+    image: grafana/loki:3.1.1
+    command: ["-config.file=/etc/loki/config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./observability/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - observability_net
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./observability/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - observability_net
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    user: root
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./observability/promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - observability_net
+
+  appdb-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://${APPDB_USER:-analytics}:${APPDB_PASSWORD:-analytics}@appdb:5432/${APPDB_DB:-analytics}?sslmode=disable
+    depends_on:
+      appdb:
+        condition: service_healthy
+    networks:
+      - observability_net
+      - serving_net
+
+  catalog-db-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://${CATALOG_USER:-iceberg}:${CATALOG_PASSWORD:-iceberg}@catalog-db:5432/${CATALOG_DB:-iceberg}?sslmode=disable
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    networks:
+      - observability_net
+      - lakehouse_net
+
 volumes:
   redpanda_data:
   minio_data:
@@ -346,6 +469,10 @@ volumes:
   catalog_data:
   clickhouse_data:
   dagster_home:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  tempo_data:
 
 networks:
   ingress_net:
@@ -353,3 +480,4 @@ networks:
   batch_net:
   lakehouse_net:
   serving_net:
+  observability_net:

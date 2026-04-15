@@ -4,5 +4,9 @@ dagster-webserver==1.10.5
 dbt-core==1.9.0
 dbt-postgres==1.9.0
 minio==7.2.15
+opentelemetry-api==1.28.2
+opentelemetry-exporter-otlp-proto-http==1.28.2
+opentelemetry-sdk==1.28.2
+prometheus-client==0.21.1
 psycopg[binary]==3.2.5
 requests==2.32.3

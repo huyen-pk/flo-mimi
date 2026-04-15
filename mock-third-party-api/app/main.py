@@ -3,8 +3,11 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 
+from app.observability import configure_app
+
 
 app = FastAPI(title="Mock Third-Party API")
+logger = configure_app(app, "mock-third-party-api")
 
 
 @app.get("/health")
@@ -15,7 +18,7 @@ def health() -> dict:
 @app.get("/partners/snapshot")
 def partner_snapshot() -> list[dict]:
     collected_at = datetime.now(timezone.utc).isoformat()
-    return [
+    payload = [
         {
             "record_id": str(uuid4()),
             "provider": "ads_partner",
@@ -31,3 +34,5 @@ def partner_snapshot() -> list[dict]:
             "payload": {"qualified_leads": 28, "pipeline_value": 93450},
         },
     ]
+    logger.info('{"event": "partner_snapshot_generated", "records": 2}')
+    return payload

@@ -2,8 +2,15 @@ logger:
   level: TRACE
   add_timestamp: true
 
+http:
+  address: 0.0.0.0:4195
+
+metrics:
+  prometheus: {}
+
 input:
   kafka_franz:
+    label: raw_events_input
     seed_brokers:
       - redpanda:9092
     topics:
@@ -14,7 +21,8 @@ input:
 output:
   broker:
     outputs:
-      - aws_s3:
+      - label: bronze_lake_sink
+        aws_s3:
           bucket: data-lake
           path: 'bronze/${!meta("kafka_topic")}/captured_at=${!timestamp_unix()}/${!uuid_v4()}.json'
           endpoint: http://minio:9000
@@ -26,7 +34,8 @@ output:
           content_type: application/json
           batching:
             count: 1
-      - http_client:
+      - label: clickhouse_raw_payload_sink
+        http_client:
           url: 'http://clickhouse:8123/?query=INSERT+INTO+serving.raw_payload+FORMAT+JSONEachRow&user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}'
           verb: POST
           headers:

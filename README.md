@@ -26,7 +26,7 @@ This workspace recreates the architecture from `architecture.md` with Docker Com
 
 ## Start The Stack
 
-1. Copy `.env.example` to `.env` if you want to override defaults.
+1. Optionally create a `.env` file if you want to override the default credentials, ports, or image tags.
 2. Start the platform:
 
 ```bash
@@ -51,10 +51,14 @@ If `minio` is marked unhealthy even though its logs show the server started, rec
 3. Open the main operator endpoints:
 
 - Dagster UI: http://localhost:3000
+- Grafana: http://localhost:3001
 - Event gateway: http://localhost:8000
+- Prometheus: http://localhost:9090
 - Platform UI: http://localhost:8081
 - Trino: http://localhost:8080
+- Loki: http://localhost:3100
 - MinIO console: http://localhost:9001
+- Tempo: http://localhost:3200
 - ClickHouse HTTP: http://localhost:8123
 
 ## Smoke Test
@@ -85,6 +89,39 @@ curl -X POST http://localhost:8000/events/analytics \
 Run the Dagster job `refresh_batch_and_serving` from the UI, or materialize it on schedule.
 
 The platform UI emits tracked interactions through the existing data-platform ingress. Campaign-oriented actions such as `Create New Brief` and campaign-row action buttons emit both analytics and campaign events; navigation, search, and filter actions emit analytics events.
+
+## Observability
+
+The stack now includes a local observability baseline in `observability/`:
+
+- `Prometheus` scrapes custom service metrics, Dagster metrics, Redpanda, Redpanda Connect, Trino, ClickHouse, and PostgreSQL exporters.
+- `Grafana` provisions Prometheus, Loki, and Tempo datasources automatically, plus starter dashboards for services and pipeline health.
+- `Loki` stores container and application logs collected by `promtail`.
+- `Tempo` stores traces emitted by the instrumented Go and Python services through the OpenTelemetry Collector.
+- `OpenTelemetry Collector` receives OTLP traces from `platform`, `event-gateway`, `mock-third-party-api`, and the Dagster processes.
+
+Custom service telemetry behavior:
+
+- `platform`, `event-gateway`, and `mock-third-party-api` expose `/metrics`.
+- These services emit structured request logs and accept or generate `X-Correlation-ID` headers.
+- `event-gateway` adds `correlation_id` to published event payloads and Kafka headers.
+- `dagster-daemon` and `dagster-webserver` expose Prometheus metrics on internal ports `9108` and `9109`.
+
+Starter dashboards are provisioned from:
+
+- `observability/grafana/dashboards/services-overview.json`
+- `observability/grafana/dashboards/data-pipeline-overview.json`
+
+If you want to inspect the telemetry plumbing directly after startup:
+
+```bash
+curl http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
+curl http://localhost:8081/metrics | head
+curl -H 'X-Correlation-ID: demo-trace-001' http://localhost:8000/health
+docker compose logs --tail=50 otel-collector promtail loki tempo
+```
+
+The Go `platform` module now resolves observability dependencies that require Go `1.25.x` for local module operations such as `go test` and `go mod tidy`.
 
 ## Notes
 

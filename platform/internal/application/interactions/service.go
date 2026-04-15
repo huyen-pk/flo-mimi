@@ -10,6 +10,7 @@ import (
 
 	"platform/internal/domain/interactions"
 	"platform/internal/ports"
+	"platform/internal/telemetry"
 )
 
 type Service struct {
@@ -71,7 +72,7 @@ func (s Service) Record(ctx context.Context, command interactions.Command) (inte
 		Accepted:      true,
 		Stored:        stored,
 		SessionID:     normalized.SessionID,
-		CorrelationID: newID("trace"),
+		CorrelationID: firstNonEmpty(telemetry.CorrelationIDFromContext(ctx), newID("trace")),
 		CampaignID:    normalized.CampaignID,
 		Published:     result.Published,
 		OccurredAt:    s.now().UTC().Format(time.RFC3339),

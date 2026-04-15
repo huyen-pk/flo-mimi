@@ -84,3 +84,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+.agents
+install-skills.sh
+skills-lock.json

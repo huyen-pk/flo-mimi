@@ -6,7 +6,7 @@ This document describes the major components in this workspace and how they are 
 
 **Components**
 - **Orchestrator**: Dagster — code and container configuration live under [dagster/repository.py](dagster/repository.py) and [dagster/Dockerfile](dagster/Dockerfile). Dagster coordinates pipelines that run ingestion, dbt, and downstream jobs.
-- **Transformation (dbt)**: dbt project is at [dbt/dbt_project.yml](dbt/dbt_project.yml). Models are in `models/` with staging and marts (e.g., [dbt/models/marts](dbt/models/marts)). dbt models build tables/views in appdb.
+- **Transformation (dbt)**: dbt project is at [dagster/dbt/dbt_project.yml](dagster/dbt/dbt_project.yml). Models are in `models/` with staging and marts (e.g., [dagster/dbt/models/marts](dagster/dbt/models/marts)). dbt models build tables/views in appdb.
 - **Event Gateway / Producers**: The event gateway service is under [event-gateway/app/main.py](event-gateway/app/main.py). Producers publish events to the streaming layer.
 - **Platform App**: The embedded Go + Svelte operator console lives under [platform](platform). It serves the UI from an embedded bundle, loads its display model from normalized SQL tables and the `analytics.platform_bootstrap` view in appdb, and forwards click interactions to `event-gateway` so they land in the same analytics and campaign event path as other producers.
 - **Mock Third-Party API**: A lightweight mock service for upstream dependencies at [mock-third-party-api/app/main.py](mock-third-party-api/app/main.py).
@@ -28,7 +28,7 @@ This document describes the major components in this workspace and how they are 
   - Redpanda Connect tasks that also sink wrapped raw payloads into ClickHouse (`serving.raw_payload`) where a Materialized View parses them into `serving.raw_events` for real-time analytics.
 - Dagster orchestrates scheduled and ad-hoc workflows:
   - Ingest jobs that pull from appdb or call external APIs (mock-third-party-api).
-  - Triggers dbt runs to materialize models in appdb (uses [dbt_project.yml](dbt/dbt_project.yml)).
+  - Triggers dbt runs to materialize models in appdb (uses [dagster/dbt/dbt_project.yml](dagster/dbt/dbt_project.yml)).
   - Runs tests and downstream tasks (e.g., publishing metrics, refreshing dashboards).
 - dbt transforms staged data into marts (business-level models) in appdb, which are then queried by Trino for analytics and dashboards.
 - Trino reads from configured catalogs (see [trino/catalog](trino/catalog)) to provide unified SQL access across systems.
@@ -41,7 +41,7 @@ This document describes the major components in this workspace and how they are 
 **References**
 - Docker compose and service definitions: [docker-compose.yml](docker-compose.yml)
 - Dagster repository and workspace: [dagster/repository.py](dagster/repository.py)
-- dbt: [dbt/dbt_project.yml](dbt/dbt_project.yml)
+- dbt: [dagster/dbt/dbt_project.yml](dagster/dbt/dbt_project.yml)
 - Redpanda connect config: [redpanda-connect/connect.yaml](redpanda-connect/connect.yaml)
 - Trino catalogs: [trino/catalog](trino/catalog)
 - Appdb init: [appdb/init/01_init.sql](appdb/init/01_init.sql)
