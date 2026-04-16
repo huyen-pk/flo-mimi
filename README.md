@@ -9,11 +9,12 @@ This workspace recreates the architecture from `architecture.md` with Docker Com
 - `mock-third-party-api`: simulates a scheduled third-party data source.
 - `dagster-webserver` and `dagster-daemon`: orchestrate scheduled collection from third-party APIs, run dbt transformations, and publish serving tables into ClickHouse.
 - `redpanda`: event bus for both real-time sources. (~AWS DMS, CDC, Flink)
-- `stream-loader`: sinks raw stream topics into MinIO bronze storage.
-- `minio`: object storage for bronze files and future lakehouse tables. (~S3)
+- `stream-loader`: sinks raw stream topics directly into MinIO bronze storage and ClickHouse raw landing tables.
+- `minio`: object storage for raw bronze files and Trino-managed Iceberg tables. (~S3)
 - `appdb`: PostgreSQL app database for platform state, consolidated analytics, and dbt transformations. (~Aurora)
 - `clickhouse`: low-latency serving store.
-- `trino`: query layer across PostgreSQL, ClickHouse, and an Iceberg catalog backed by MinIO. (~Athena)
+- `trino`: query layer plus batch publication path across PostgreSQL, ClickHouse, and an Iceberg catalog backed by MinIO. (~Athena)
+- `lakehouse-init`: one-shot bootstrap that creates ClickHouse and Iceberg objects required by the local stack.
 - `catalog-db`: PostgreSQL metadata store for the Trino Iceberg catalog.
 
 ## Networks
@@ -125,11 +126,11 @@ The Go `platform` module now resolves observability dependencies that require Go
 
 ## Notes
 
-- Raw streaming payloads land in MinIO under `bronze/email_events_raw` and `bronze/analytics_events_raw`.
- - Raw streaming payloads land in MinIO under `bronze/email_events_raw` and `bronze/analytics_events_raw`.
- - Redpanda Connect now also writes wrapped raw event payloads into ClickHouse table `serving.raw_payload`. A Materialized View `serving.mv_raw_payload_to_events` parses the JSON `payload` into typed columns and populates `serving.raw_events` for low-latency serving. See [clickhouse/init/01_mv_parse_raw_payload.sql](clickhouse/init/01_mv_parse_raw_payload.sql).
+- Raw streaming payloads land directly in MinIO under `bronze/email_events_raw` and `bronze/analytics_events_raw`.
+- The same payloads also land directly in ClickHouse table `serving.raw_payload`, and the materialized view in `clickhouse/init/01_mv_parse_raw_payload.sql` keeps `serving.raw_events` current for low-latency reads.
+- Dagster synchronizes new raw bronze objects from MinIO into `iceberg.ingress.raw_events` through Trino and records processed object keys in `iceberg.ingress.processed_raw_event_objects` so ClickHouse stays a serving projection rather than the Iceberg source of truth.
 - dbt models live in `dagster/dbt` and run against PostgreSQL appdb as the transformation target.
-- Trino is configured with PostgreSQL, ClickHouse, and Iceberg catalogs so you can add direct MinIO-backed lakehouse tables later without changing the network topology.
+- Trino is configured with PostgreSQL, ClickHouse, and Iceberg catalogs. It stays on the read path for the platform and on the batch publication path for ClickHouse and Iceberg synchronization.
 - The platform app is built from `platform/` as a multi-stage container that embeds the Svelte bundle into the Go binary.
 - The platform bootstrap model now comes from the `analytics.platform_bootstrap` SQL view, backed by normalized tables seeded in [appdb/init/02_platform_bootstrap.sql](appdb/init/02_platform_bootstrap.sql) and live aggregate views in [appdb/init/03_platform_bootstrap_views.sql](appdb/init/03_platform_bootstrap_views.sql).
 - The current appdb seed can be exported as SQL `INSERT` statements with [appdb/queries/export_platform_seed.sql](appdb/queries/export_platform_seed.sql).

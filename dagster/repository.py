@@ -1,15 +1,14 @@
 import json
 import os
 import subprocess
-from io import BytesIO
+import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 
-import clickhouse_connect
+import boto3
 import psycopg
 import requests
 from dagster import Definitions, In, Nothing, OpExecutionContext, ScheduleDefinition, job, op
-from minio import Minio
 from psycopg.types.json import Jsonb
 
 from telemetry import instrumented_op, log_event, record_dbt_run, record_rows, setup_telemetry
@@ -18,22 +17,237 @@ from telemetry import instrumented_op, log_event, record_dbt_run, record_rows, s
 setup_telemetry()
 
 
-def minio_client() -> Minio:
-    return Minio(
-        endpoint=os.environ["MINIO_ENDPOINT"],
-        access_key=os.environ["MINIO_ACCESS_KEY"],
-        secret_key=os.environ["MINIO_SECRET_KEY"],
-        secure=False,
+class TrinoError(RuntimeError):
+    pass
+
+
+def trino_base_url() -> str:
+    return f"http://{os.environ['TRINO_HOST']}:{os.environ['TRINO_PORT']}"
+
+
+def trino_headers() -> dict[str, str]:
+    return {
+        "X-Trino-User": os.environ.get("TRINO_USER", "dagster"),
+        "X-Trino-Source": "dagster",
+    }
+
+
+def trino_execute(sql: str) -> list[list]:
+    response = requests.post(
+        f"{trino_base_url()}/v1/statement",
+        data=sql.encode("utf-8"),
+        headers=trino_headers(),
+        timeout=30,
     )
+    response.raise_for_status()
+    payload = response.json()
+    rows: list[list] = []
+    while True:
+        if payload.get("error"):
+            raise TrinoError(payload["error"].get("message", "unknown Trino error"))
+        if payload.get("data"):
+            rows.extend(payload["data"])
+        next_uri = payload.get("nextUri")
+        if not next_uri:
+            return rows
+        response = requests.get(next_uri, headers=trino_headers(), timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+
+
+def trino_execute_file(path: Path) -> None:
+    statements = [statement.strip() for statement in path.read_text().split(";") if statement.strip()]
+    for statement in statements:
+        trino_execute(statement)
+
+
+def sql_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def sql_nullable_string(value: str | None) -> str:
+    if value is None or value == "":
+        return "NULL"
+    return sql_string(value)
+
+
+def sql_timestamp(value: str | datetime) -> str:
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        parsed = value
+    utc_value = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return f"TIMESTAMP '{utc_value.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}'"
+
+
+def sql_date(value: datetime) -> str:
+    return f"DATE '{value.astimezone(timezone.utc).strftime('%Y-%m-%d')}'"
 
 
 def appdb_connection():
     return psycopg.connect(os.environ["APPDB_DSN"])
 
 
+def minio_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=os.environ["MINIO_ENDPOINT_URL"],
+        aws_access_key_id=os.environ["MINIO_ROOT_USER"],
+        aws_secret_access_key=os.environ["MINIO_ROOT_PASSWORD"],
+        region_name=os.environ.get("MINIO_REGION", "us-east-1"),
+    )
+
+
+def bronze_object_topic(object_key: str) -> str:
+    parts = object_key.split("/")
+    if len(parts) > 1 and parts[0] == "bronze":
+        return parts[1]
+    return "unknown"
+
+
+def chunked(values: list[dict], size: int) -> list[list[dict]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def parse_event_timestamp(value: str | datetime | None) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def canonical_payload(payload: dict) -> str:
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def raw_event_record_value(record: dict) -> tuple[str, str]:
+    payload_text = canonical_payload(record)
+    event_id = record.get("event_id") or hashlib.md5(payload_text.encode("utf-8")).hexdigest()
+    event_name = record.get("event_name") or record.get("event_type")
+    occurred_at = parse_event_timestamp(record.get("occurred_at"))
+    value = (
+        "("
+        f"{sql_string(event_id)}, {sql_nullable_string(event_name)}, {sql_nullable_string(record.get('campaign_id'))}, "
+        f"{sql_nullable_string(record.get('user_id'))}, {sql_nullable_string(record.get('page_url'))}, "
+        f"{sql_timestamp(occurred_at)}, {sql_date(occurred_at)}, {sql_string(payload_text)}"
+        ")"
+    )
+    return event_id, value
+
+
+def processed_object_value(metadata: dict, processed_at: datetime) -> str:
+    return (
+        "("
+        f"{sql_string(metadata['object_key'])}, {sql_nullable_string(metadata.get('etag'))}, "
+        f"{sql_string(metadata['source_topic'])}, {sql_timestamp(metadata['last_modified'])}, {sql_timestamp(processed_at)}"
+        ")"
+    )
+
+
+def processed_object_keys() -> set[str]:
+    rows = trino_execute("SELECT object_key FROM iceberg.ingress.processed_raw_event_objects")
+    return {str(row[0]) for row in rows if row and row[0] is not None}
+
+
+def list_unprocessed_bronze_objects() -> list[dict]:
+    client = minio_client()
+    seen_keys = processed_object_keys()
+    discovered: list[dict] = []
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=os.environ["MINIO_BUCKET"], Prefix="bronze/"):
+        for item in page.get("Contents", []):
+            object_key = item["Key"]
+            if object_key.endswith("/") or object_key in seen_keys:
+                continue
+            discovered.append(
+                {
+                    "object_key": object_key,
+                    "etag": item.get("ETag", "").strip('"') or None,
+                    "source_topic": bronze_object_topic(object_key),
+                    "last_modified": item["LastModified"],
+                }
+            )
+    discovered.sort(key=lambda item: item["object_key"])
+    return discovered
+
+
+def load_bronze_event_payloads(objects: list[dict]) -> tuple[list[dict], int]:
+    client = minio_client()
+    unique_events: dict[str, dict] = {}
+    for metadata in objects:
+        response = client.get_object(Bucket=os.environ["MINIO_BUCKET"], Key=metadata["object_key"])
+        try:
+            payload = json.loads(response["Body"].read().decode("utf-8"))
+        finally:
+            response["Body"].close()
+        event_id, value = raw_event_record_value(payload)
+        unique_events[event_id] = {"event_id": event_id, "value": value}
+    return list(unique_events.values()), len(unique_events)
+
+
+def merge_bronze_events_into_iceberg(events: list[dict]) -> None:
+    for batch in chunked(events, 200):
+        values = ", ".join(item["value"] for item in batch)
+        trino_execute(
+            """
+            MERGE INTO iceberg.ingress.raw_events AS target
+            USING (VALUES
+            """
+            + values
+            + """
+            ) AS source (
+                event_id,
+                event_name,
+                campaign_id,
+                user_id,
+                page_url,
+                occurred_at,
+                event_date,
+                payload
+            )
+            ON target.event_id = source.event_id
+            WHEN NOT MATCHED THEN INSERT (
+                event_id,
+                event_name,
+                campaign_id,
+                user_id,
+                page_url,
+                occurred_at,
+                event_date,
+                payload
+            ) VALUES (
+                source.event_id,
+                source.event_name,
+                source.campaign_id,
+                source.user_id,
+                source.page_url,
+                source.occurred_at,
+                source.event_date,
+                source.payload
+            )
+            """
+        )
+
+
+def record_processed_bronze_objects(objects: list[dict]) -> None:
+    processed_at = datetime.now(timezone.utc)
+    for batch in chunked(objects, 200):
+        values = ", ".join(processed_object_value(item, processed_at) for item in batch)
+        trino_execute(
+            "INSERT INTO iceberg.ingress.processed_raw_event_objects "
+            "(object_key, etag, source_topic, last_modified, processed_at) VALUES "
+            + values
+        )
+
+
 @op(out=Nothing)
 def fetch_third_party_data(context: OpExecutionContext) -> None:
     with instrumented_op(context, "fetch_third_party_data"):
+        trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
         response = requests.get(
             f"{os.environ['THIRD_PARTY_API_BASE_URL']}/partners/snapshot",
             headers={"X-Correlation-ID": context.run_id},
@@ -42,18 +256,22 @@ def fetch_third_party_data(context: OpExecutionContext) -> None:
         response.raise_for_status()
         records = response.json()
 
-        bucket = os.environ["MINIO_BUCKET"]
         captured_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        object_key = f"bronze/third_party/captured_at={captured_at}/snapshot.json"
-        client = minio_client()
-        payload = json.dumps(records).encode("utf-8")
-        client.put_object(
-            bucket,
-            object_key,
-            data=BytesIO(payload),
-            length=len(payload),
-            content_type="application/json",
-            metadata={"correlation-id": context.run_id},
+        object_key = f"lakehouse/ingress/third_party/captured_at={captured_at}/snapshot.json"
+        snapshot_captured_at = datetime.now(timezone.utc)
+        values = []
+        for record in records:
+            values.append(
+                "("
+                f"{sql_string(record['record_id'])}, {sql_string(record['provider'])}, {sql_nullable_string(record.get('account_id'))}, "
+                f"{sql_timestamp(record['collected_at'])}, {sql_timestamp(snapshot_captured_at)}, {sql_date(snapshot_captured_at)}, {sql_string(object_key)}, "
+                f"{sql_string(json.dumps(record.get('payload', {}), separators=(',', ':'), sort_keys=True))}"
+                ")"
+            )
+        trino_execute(
+            "INSERT INTO iceberg.ingress.third_party_snapshots "
+            "(record_id, provider, account_id, collected_at, captured_at, captured_date, object_key, payload) VALUES "
+            + ", ".join(values)
         )
 
         with appdb_connection() as connection:
@@ -129,95 +347,77 @@ def run_dbt_models(context: OpExecutionContext) -> None:
 @op(ins={"start": In(Nothing)})
 def publish_serving_tables(context: OpExecutionContext) -> None:
     with instrumented_op(context, "publish_serving_tables"):
-        clickhouse = clickhouse_connect.get_client(
-            host=os.environ["CLICKHOUSE_HOST"],
-            port=int(os.environ["CLICKHOUSE_PORT"]),
-        )
-        clickhouse.command("create database if not exists serving")
-        clickhouse.command(
+        trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
+        trino_execute("TRUNCATE TABLE clickhouse.serving.campaign_performance")
+        trino_execute(
             """
-            create table if not exists serving.campaign_performance (
-                campaign_id String,
-                delivered_events UInt64,
-                open_events UInt64,
-                click_events UInt64,
-                first_seen_at DateTime,
-                last_seen_at DateTime
-            ) engine = ReplacingMergeTree()
-            order by campaign_id
+            INSERT INTO clickhouse.serving.campaign_performance
+            SELECT
+                campaign_id,
+                CAST(delivered_events AS BIGINT),
+                CAST(open_events AS BIGINT),
+                CAST(click_events AS BIGINT),
+                CAST(date_trunc('second', first_seen_at) AS TIMESTAMP(0)),
+                CAST(date_trunc('second', last_seen_at) AS TIMESTAMP(0))
+            FROM postgresql.analytics.mart_campaign_performance
             """
         )
-        clickhouse.command(
+        trino_execute("TRUNCATE TABLE clickhouse.serving.product_engagement")
+        trino_execute(
             """
-            create table if not exists serving.product_engagement (
-                page_url String,
-                event_name String,
-                event_count UInt64,
-                unique_users UInt64,
-                first_seen_at DateTime,
-                last_seen_at DateTime
-            ) engine = ReplacingMergeTree()
-            order by (page_url, event_name)
+            INSERT INTO clickhouse.serving.product_engagement
+            SELECT
+                COALESCE(page_url, ''),
+                COALESCE(event_name, ''),
+                CAST(event_count AS BIGINT),
+                CAST(unique_users AS BIGINT),
+                CAST(date_trunc('second', first_seen_at) AS TIMESTAMP(0)),
+                CAST(date_trunc('second', last_seen_at) AS TIMESTAMP(0))
+            FROM postgresql.analytics.mart_product_engagement
             """
         )
 
-        with appdb_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    select campaign_id, delivered_events, open_events, click_events, first_seen_at, last_seen_at
-                    from analytics.mart_campaign_performance
-                    order by campaign_id
-                    """
-                )
-                campaign_rows = cursor.fetchall()
+        campaign_rows = trino_execute("SELECT count(*) FROM clickhouse.serving.campaign_performance")
+        engagement_rows = trino_execute("SELECT count(*) FROM clickhouse.serving.product_engagement")
+        campaign_count = int(campaign_rows[0][0]) if campaign_rows else 0
+        engagement_count = int(engagement_rows[0][0]) if engagement_rows else 0
 
-                cursor.execute(
-                    """
-                    select page_url, event_name, event_count, unique_users, first_seen_at, last_seen_at
-                    from analytics.mart_product_engagement
-                    order by page_url, event_name
-                    """
-                )
-                engagement_rows = cursor.fetchall()
-
-        clickhouse.command("truncate table serving.campaign_performance")
-        clickhouse.command("truncate table serving.product_engagement")
-
-        if campaign_rows:
-            clickhouse.insert(
-                "serving.campaign_performance",
-                campaign_rows,
-                column_names=[
-                    "campaign_id",
-                    "delivered_events",
-                    "open_events",
-                    "click_events",
-                    "first_seen_at",
-                    "last_seen_at",
-                ],
-            )
-        if engagement_rows:
-            clickhouse.insert(
-                "serving.product_engagement",
-                engagement_rows,
-                column_names=[
-                    "page_url",
-                    "event_name",
-                    "event_count",
-                    "unique_users",
-                    "first_seen_at",
-                    "last_seen_at",
-                ],
-            )
-
-        record_rows("campaign_performance", len(campaign_rows))
-        record_rows("product_engagement", len(engagement_rows))
+        record_rows("campaign_performance", campaign_count)
+        record_rows("product_engagement", engagement_count)
         log_event(
             context,
             "serving_tables_published",
-            campaign_rows=len(campaign_rows),
-            engagement_rows=len(engagement_rows),
+            campaign_rows=campaign_count,
+            engagement_rows=engagement_count,
+        )
+
+
+@op(ins={"start": In(Nothing)})
+def sync_raw_events_to_lakehouse(context: OpExecutionContext) -> None:
+    with instrumented_op(context, "sync_raw_events_to_lakehouse"):
+        trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
+        bronze_objects = list_unprocessed_bronze_objects()
+        if not bronze_objects:
+            raw_event_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_events")
+            raw_event_count = int(raw_event_rows[0][0]) if raw_event_rows else 0
+            record_rows("iceberg_ingress_raw_events", raw_event_count)
+            log_event(context, "lakehouse_raw_events_synced", raw_event_rows=raw_event_count, processed_objects=0, inserted_events=0)
+            return
+
+        event_rows, inserted_event_count = load_bronze_event_payloads(bronze_objects)
+        if event_rows:
+            merge_bronze_events_into_iceberg(event_rows)
+        record_processed_bronze_objects(bronze_objects)
+
+        raw_event_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_events")
+        raw_event_count = int(raw_event_rows[0][0]) if raw_event_rows else 0
+        record_rows("iceberg_ingress_raw_events", raw_event_count)
+        log_event(
+            context,
+            "lakehouse_raw_events_synced",
+            raw_event_rows=raw_event_count,
+            processed_objects=len(bronze_objects),
+            inserted_events=inserted_event_count,
         )
 
 
@@ -225,7 +425,8 @@ def publish_serving_tables(context: OpExecutionContext) -> None:
 def refresh_batch_and_serving() -> None:
     fetched = fetch_third_party_data()
     transformed = run_dbt_models(fetched)
-    publish_serving_tables(transformed)
+    published = publish_serving_tables(transformed)
+    sync_raw_events_to_lakehouse(published)
 
 
 refresh_batch_and_serving_schedule = ScheduleDefinition(
@@ -235,49 +436,18 @@ refresh_batch_and_serving_schedule = ScheduleDefinition(
 
 
 @op(out=Nothing)
-def init_clickhouse_streaming_schema(context: OpExecutionContext) -> None:
-    with instrumented_op(context, "init_clickhouse_streaming_schema"):
-        clickhouse = clickhouse_connect.get_client(
-            host=os.environ["CLICKHOUSE_HOST"],
-            port=int(os.environ["CLICKHOUSE_PORT"]),
-        )
-        clickhouse.command("create database if not exists serving")
-        clickhouse.command("create database if not exists streaming")
-        clickhouse.command(
-            """
-            create table if not exists serving.raw_events (
-                event_name String,
-                campaign_id String,
-                user_id String,
-                occurred_at DateTime,
-                payload String
-            ) engine = MergeTree()
-            order by (occurred_at)
-            """
-        )
-
-        clickhouse.command(
-            "create table if not exists streaming.email_events_kafka (payload String) engine = Kafka('redpanda:9092', 'email_events_raw', 'ch_email_group', 'JSONEachRow')"
-        )
-        clickhouse.command(
-            "create table if not exists streaming.analytics_events_kafka (payload String) engine = Kafka('redpanda:9092', 'analytics_events_raw', 'ch_analytics_group', 'JSONEachRow')"
-        )
-
-        clickhouse.command(
-            "create materialized view if not exists mv_email_events to serving.raw_events as select JSONExtractString(payload, 'event') as event_name, JSONExtractString(payload, 'campaign_id') as campaign_id, JSONExtractString(payload, 'user_id') as user_id, parseDateTimeBestEffort(JSONExtractString(payload, 'timestamp')) as occurred_at, payload from streaming.email_events_kafka"
-        )
-        clickhouse.command(
-            "create materialized view if not exists mv_analytics_events to serving.raw_events as select JSONExtractString(payload, 'event') as event_name, JSONExtractString(payload, 'page_url') as campaign_id, JSONExtractString(payload, 'user_id') as user_id, parseDateTimeBestEffort(JSONExtractString(payload, 'timestamp')) as occurred_at, payload from streaming.analytics_events_kafka"
-        )
-        log_event(context, "clickhouse_streaming_schema_initialized")
+def init_trino_ingress_catalogs(context: OpExecutionContext) -> None:
+    with instrumented_op(context, "init_trino_ingress_catalogs"):
+        trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
+        log_event(context, "trino_ingress_catalogs_initialized")
 
 
 @job
-def init_clickhouse_schema_job() -> None:
-    init_clickhouse_streaming_schema()
+def init_trino_catalogs_job() -> None:
+    init_trino_ingress_catalogs()
 
 
 defs = Definitions(
-    jobs=[refresh_batch_and_serving, init_clickhouse_schema_job],
+    jobs=[refresh_batch_and_serving, init_trino_catalogs_job],
     schedules=[refresh_batch_and_serving_schedule],
 )

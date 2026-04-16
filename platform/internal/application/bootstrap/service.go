@@ -26,7 +26,7 @@ func (s Service) Load(ctx context.Context) (bootstrap.AppBootstrap, error) {
 	if s.analyticsRepo != nil {
 		analytics, err := s.analyticsRepo.LoadAnalytics(ctx)
 		if err != nil {
-			slog.Default().Warn("load analytics from clickhouse", "error", err)
+			slog.Default().Warn("load analytics from trino", "error", err)
 		} else {
 			model.Analytics = analytics
 		}

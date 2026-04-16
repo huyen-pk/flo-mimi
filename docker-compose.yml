@@ -17,6 +17,7 @@ services:
     ports:
       - "19092:19092"
       - "9644:9644"
+      - "8082:8082"
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health || exit 1"]
       interval: 10s
@@ -107,6 +108,8 @@ services:
       POSTGRES_DB: ${CATALOG_DB:-iceberg}
       POSTGRES_USER: ${CATALOG_USER:-iceberg}
       POSTGRES_PASSWORD: ${CATALOG_PASSWORD:-iceberg}
+    ports:
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${CATALOG_USER:-iceberg} -d ${CATALOG_DB:-iceberg}"]
       interval: 10s
@@ -114,6 +117,29 @@ services:
       retries: 10
     volumes:
       - catalog_data:/var/lib/postgresql/data
+    networks:
+      - lakehouse_net
+
+  catalog-db-init:
+    image: postgres:16-alpine
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${CATALOG_PASSWORD:-iceberg}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        psql \
+          --host=catalog-db \
+          --username=${CATALOG_USER:-iceberg} \
+          --dbname=${CATALOG_DB:-iceberg} \
+          --file=/docker-entrypoint-initdb.d/01_iceberg_jdbc_catalog.sql \
+          --set=ON_ERROR_STOP=1
+    restart: "no"
+    volumes:
+      - ./catalog-db/init:/docker-entrypoint-initdb.d:ro
     networks:
       - lakehouse_net
 
@@ -135,17 +161,23 @@ services:
 
   trino:
     image: trinodb/trino:468
+    user: root
     depends_on:
       appdb:
         condition: service_healthy
-      catalog-db:
-        condition: service_healthy
+      catalog-db-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
       clickhouse:
         condition: service_started
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     environment:
       APPDB_DB: ${APPDB_DB:-analytics}
       APPDB_USER: ${APPDB_USER:-analytics}
@@ -153,6 +185,8 @@ services:
       CATALOG_DB: ${CATALOG_DB:-iceberg}
       CATALOG_USER: ${CATALOG_USER:-iceberg}
       CATALOG_PASSWORD: ${CATALOG_PASSWORD:-iceberg}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
     volumes:
@@ -160,9 +194,39 @@ services:
       - ./trino/jvm.config:/etc/trino/jvm.config:ro
       - ./trino/node.properties:/etc/trino/node.properties:ro
       - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/plugin/postgresql/postgresql.jar:/usr/lib/trino/plugin/iceberg/postgresql.jar:ro
     networks:
       - lakehouse_net
       - serving_net
+
+  lakehouse-init:
+    image: python:3.11-slim
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: lakehouse-init
+      TRINO_INIT_SQL: /app/trino-init/01_ingress_catalogs.sql
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_INIT_SQL: /app/clickhouse-init/01_mv_parse_raw_payload.sql
+    depends_on:
+      catalog-db-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+    command: ["python", "/app/trino-init/bootstrap.py"]
+    restart: "no"
+    volumes:
+      - ./trino/init:/app/trino-init:ro
+      - ./clickhouse/init:/app/clickhouse-init:ro
+    networks:
+      - lakehouse_net
 
   event-gateway:
     image: flomimi/event-gateway:local
@@ -196,8 +260,9 @@ services:
       EVENT_GATEWAY_BASE_URL: http://event-gateway:8000
       PLATFORM_ENVIRONMENT: local
       APPDB_DSN: postgresql://${APPDB_USER:-analytics}:${APPDB_PASSWORD:-analytics}@appdb:5432/${APPDB_DB:-analytics}?sslmode=disable
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: platform
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: platform
     depends_on:
@@ -222,6 +287,8 @@ services:
       redpanda-init:
         condition: service_completed_successfully
       minio-init:
+        condition: service_completed_successfully
+      lakehouse-init:
         condition: service_completed_successfully
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
@@ -257,16 +324,17 @@ services:
     command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/opt/dagster/app/workspace.yaml"]
     environment:
       DAGSTER_HOME: /opt/dagster/dagster_home
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
-      MINIO_BUCKET: data-lake
       THIRD_PARTY_API_BASE_URL: http://mock-third-party-api:8010
       APPDB_DSN: postgresql://${APPDB_USER:-analytics}:${APPDB_PASSWORD:-analytics}@appdb:5432/${APPDB_DB:-analytics}
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: 8123
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      MINIO_ENDPOINT_URL: http://minio:9000
+      MINIO_BUCKET: data-lake
+      MINIO_REGION: us-east-1
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: dagster
+      TRINO_INIT_DIR: /opt/dagster/app/trino-init
       DBT_PROJECT_DIR: /opt/dagster/app/dbt
       DBT_PROFILES_DIR: /opt/dagster/app/dbt
       DBT_HOST: appdb
@@ -279,18 +347,21 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: dagster-webserver
     depends_on:
+      lakehouse-init:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
       appdb:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
+      trino:
+        condition: service_healthy
       mock-third-party-api:
         condition: service_healthy
     ports:
       - "3000:3000"
     volumes:
       - dagster_home:/opt/dagster/dagster_home
+      - ./trino/init:/opt/dagster/app/trino-init:ro
     networks:
       - batch_net
       - lakehouse_net
@@ -301,16 +372,17 @@ services:
     command: ["dagster-daemon", "run", "-w", "/opt/dagster/app/workspace.yaml"]
     environment:
       DAGSTER_HOME: /opt/dagster/dagster_home
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
-      MINIO_BUCKET: data-lake
       THIRD_PARTY_API_BASE_URL: http://mock-third-party-api:8010
       APPDB_DSN: postgresql://${APPDB_USER:-analytics}:${APPDB_PASSWORD:-analytics}@appdb:5432/${APPDB_DB:-analytics}
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: 8123
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      MINIO_ENDPOINT_URL: http://minio:9000
+      MINIO_BUCKET: data-lake
+      MINIO_REGION: us-east-1
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_USER: dagster
+      TRINO_INIT_DIR: /opt/dagster/app/trino-init
       DBT_PROJECT_DIR: /opt/dagster/app/dbt
       DBT_PROFILES_DIR: /opt/dagster/app/dbt
       DBT_HOST: appdb
@@ -327,6 +399,7 @@ services:
         condition: service_started
     volumes:
       - dagster_home:/opt/dagster/dagster_home
+      - ./trino/init:/opt/dagster/app/trino-init:ro
     networks:
       - batch_net
       - lakehouse_net

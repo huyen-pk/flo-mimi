@@ -49,7 +49,11 @@ func main() {
 	}
 	eventGateway := gatewayadapter.NewHTTPEventGateway(envOrDefault("EVENT_GATEWAY_BASE_URL", "http://localhost:8000"), httpClient)
 
-	analyticsRepo, err := analyticsadapter.NewClickHouseRepository(envOrDefault("CLICKHOUSE_HOST", "clickhouse"), envOrDefault("CLICKHOUSE_PORT", "8123"))
+	analyticsRepo, err := analyticsadapter.NewTrinoRepository(
+		envOrDefault("TRINO_HOST", "trino"),
+		envOrDefault("TRINO_PORT", "8080"),
+		envOrDefault("TRINO_USER", "platform"),
+	)
 	if err != nil {
 		logger.Error("create analytics repository", "error", err)
 		os.Exit(1)
