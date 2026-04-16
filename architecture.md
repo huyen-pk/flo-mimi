@@ -1,4 +1,4 @@
-**Architecture Overview**
+## Architecture Overview
 
 This document describes the major components in this workspace and how they are wired together to enable event-driven ingestion, transformation with dbt, orchestration with Dagster, and analytics via Trino and appdb.
 
@@ -44,7 +44,7 @@ This document describes the major components in this workspace and how they are 
 - Appdb init: [appdb/init/01_init.sql](appdb/init/01_init.sql)
 ---
 
-### Architectural Analysis: Event Storage & Ingestion Strategy
+## Architectural Analysis: Event Storage & Ingestion Strategy
 
 #### 1. Current State: Parallel Dual-Ingest (Micro-Lambda Architecture)
 Currently, event data is ingested in parallel into both **ClickHouse** and **MinIO**. This dual-path approach implements a "Tiered Storage" pattern that functions as a Micro-Lambda architecture:
