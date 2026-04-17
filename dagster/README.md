@@ -20,7 +20,7 @@ The `publish_serving_tables` step executes a cross-system data movement: `TRUNCA
   - *Cons*: Expensive for high-volume datasets (full scan and write), temporary latency/availability gaps during swap.
 - **CDC / Streaming Ingest (Redpanda -> ClickHouse)**:
   - *Pros*: Near zero-latency serving updates.
-  - *Cons*: **Highest Operational Cost**. Operating stateful CDC agents (e.g. Debezium, Kafka Connect) means managing complex error handling, deduplication logic (using specialized `ReplacingMergeTree` views), schema evolution issues, offset management, and re-processing streams during incidents.
+  - *Cons*: [**Highest Operational Cost**](./README.md#real-cost-of-cdc). Operating stateful CDC agents (e.g. Debezium, Kafka Connect) means managing complex error handling, deduplication logic (using specialized `ReplacingMergeTree` views), schema evolution issues, offset management, and re-processing streams during incidents.
 - **Direct dbt to ClickHouse Integration**:
   - *Pros*: One less data-movement step.
   - *Cons*: Couples transformations tightly to the serving DB, risking mixed read/write workloads impacting low-latency product dashboards.
@@ -52,3 +52,20 @@ The system indexes only minimal object telemetry (timestamp, source topic, etag,
   - *Cons*: Very costly ingestion loops. Expanding events individually requires compute-intense JSON unwrapping, UUID-based deduplication logic, memory staging, and expensive continuous Parquet compactions (small file problems) on MinIO.
 
 **Conclusion**: Since raw events represent a cold-retention tier strictly meant for audits, replays, or infrequent ad-hoc discovery, allocating heavy, daily write resources to structure them is deemed poor ROI. The minimal metadata catalog balances keeping an accurate auditable view of ingestion while offloading parse costs purely to read-time when deliberately interrogated by Trino.
+
+
+---
+### Real cost of CDC
+
+CDC/streaming turns your pipeline into a continuously running, stateful, distributed system with hard correctness/ordering guarantees and tight SLAs — that multiplies infrastructure, engineering, and operational effort.
+
+- **Infrastructure**: brokers, connectors, stream processors, durable storage, and scaling/HA for each component (more services to run, tune, and monitor).
+- **Correctness guarantees**: ordering, exactly‑once or dedup semantics, and reprocessing require careful design (idempotent sinks, transactional writes, or complex watermarking).
+- **ClickHouse integration**: ClickHouse isn’t a transactional row-store — implementing safe upserts requires Kafka engine patterns, CollapsingMergeTree/merge logic, atomic swaps, or extra dedup layers, all adding complexity.
+- **Backpressure & reliability**: slow sinks, bursty producers, or rebalances produce consumer lag and require throttling, retry, and capacity planning.
+- **Schema evolution & serialization**: need schema registry / converters and careful compatibility handling for live streams.
+- **Operational surface area**: alerting, offset management, connector failures, topic compaction, broker maintenance, and replay tooling — all increase SRE load and on‑call burden.
+- **Testing & recovery**: end‑to‑end testing, deterministic replays, and incident recovery are harder and cost more engineering time.
+- **Cost (people + ops)**: continuous systems require ongoing tuning, upgrades, and runbook maintenance — higher recurring human cost than batch jobs.
+
+**Mitigations**: use managed Kafka/Redpanda, Kafka Connect + Debezium, or a hosted stream-processing product; adopt idempotent writes + atomic-swap patterns; or prefer incremental/batched loads or dbt→ClickHouse if you want much lower ops cost.

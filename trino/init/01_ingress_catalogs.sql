@@ -1,30 +1,37 @@
+-- Drop demo tables and replace with a clean, metadata-only object index.
+DROP TABLE IF EXISTS iceberg.ingress.raw_events;
+DROP TABLE IF EXISTS iceberg.ingress.processed_raw_event_objects;
+
 CREATE SCHEMA IF NOT EXISTS iceberg.ingress
 WITH (location = 's3://data-lake/lakehouse/ingress');
 
-CREATE TABLE IF NOT EXISTS iceberg.ingress.raw_events (
-    event_id VARCHAR,
-    event_name VARCHAR,
-    campaign_id VARCHAR,
-    user_id VARCHAR,
-    page_url VARCHAR,
-    occurred_at TIMESTAMP(3),
-    event_date DATE,
-    payload VARCHAR
-)
-WITH (
-    format = 'PARQUET',
-    partitioning = ARRAY['event_date']
-);
-
-CREATE TABLE IF NOT EXISTS iceberg.ingress.processed_raw_event_objects (
+-- Metadata-only index of MinIO bronze objects. Stores one row per object.
+CREATE TABLE IF NOT EXISTS iceberg.ingress.raw_object_index (
     object_key VARCHAR,
     etag VARCHAR,
     source_topic VARCHAR,
     last_modified TIMESTAMP(3),
-    processed_at TIMESTAMP(3)
+    processed_at TIMESTAMP(3),
+    processed_date DATE,
+    size BIGINT
 )
 WITH (
-    format = 'PARQUET'
+    format = 'PARQUET',
+    partitioning = ARRAY['processed_date','source_topic']
+);
+
+-- Expose MinIO bronze files through the Hive connector so Trino can read objects on-demand.
+CREATE SCHEMA IF NOT EXISTS hive.ingress;
+
+-- This is a lightweight external table that maps the bronze prefix. Query the file contents
+-- via the Hive connector (one or more rows per file depending on file format). Use the
+-- file path or connector-provided metadata to join against `iceberg.ingress.raw_object_index`.
+CREATE TABLE IF NOT EXISTS hive.ingress.bronze_objects (
+    content VARCHAR
+)
+WITH (
+    format = 'TEXTFILE',
+    external_location = 's3://data-lake/bronze/'
 );
 
 CREATE TABLE IF NOT EXISTS iceberg.ingress.third_party_snapshots (

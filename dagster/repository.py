@@ -84,6 +84,12 @@ def sql_date(value: datetime) -> str:
     return f"DATE '{value.astimezone(timezone.utc).strftime('%Y-%m-%d')}'"
 
 
+def sql_nullable_int(value: int | None) -> str:
+    if value is None:
+        return "NULL"
+    return str(int(value))
+
+
 def appdb_connection():
     return psycopg.connect(os.environ["APPDB_DSN"])
 
@@ -140,6 +146,7 @@ def raw_event_record_value(record: dict) -> tuple[str, str]:
 
 
 def processed_object_value(metadata: dict, processed_at: datetime) -> str:
+    # Deprecated: replaced by `object_index_value` for the metadata-only index.
     return (
         "("
         f"{sql_string(metadata['object_key'])}, {sql_nullable_string(metadata.get('etag'))}, "
@@ -149,7 +156,7 @@ def processed_object_value(metadata: dict, processed_at: datetime) -> str:
 
 
 def processed_object_keys() -> set[str]:
-    rows = trino_execute("SELECT object_key FROM iceberg.ingress.processed_raw_event_objects")
+    rows = trino_execute("SELECT object_key FROM iceberg.ingress.raw_object_index")
     return {str(row[0]) for row in rows if row and row[0] is not None}
 
 
@@ -169,77 +176,35 @@ def list_unprocessed_bronze_objects() -> list[dict]:
                     "etag": item.get("ETag", "").strip('"') or None,
                     "source_topic": bronze_object_topic(object_key),
                     "last_modified": item["LastModified"],
+                    "size": item.get("Size"),
                 }
             )
     discovered.sort(key=lambda item: item["object_key"])
     return discovered
 
 
-def load_bronze_event_payloads(objects: list[dict]) -> tuple[list[dict], int]:
-    client = minio_client()
-    unique_events: dict[str, dict] = {}
-    for metadata in objects:
-        response = client.get_object(Bucket=os.environ["MINIO_BUCKET"], Key=metadata["object_key"])
-        try:
-            payload = json.loads(response["Body"].read().decode("utf-8"))
-        finally:
-            response["Body"].close()
-        event_id, value = raw_event_record_value(payload)
-        unique_events[event_id] = {"event_id": event_id, "value": value}
-    return list(unique_events.values()), len(unique_events)
+# Event-level parsing and materialization into Iceberg has been removed.
+# We keep only object-level metadata in `iceberg.ingress.raw_object_index` and
+# rely on the Hive external table for on-demand object reads.
 
 
-def merge_bronze_events_into_iceberg(events: list[dict]) -> None:
-    for batch in chunked(events, 200):
-        values = ", ".join(item["value"] for item in batch)
-        trino_execute(
-            """
-            MERGE INTO iceberg.ingress.raw_events AS target
-            USING (VALUES
-            """
-            + values
-            + """
-            ) AS source (
-                event_id,
-                event_name,
-                campaign_id,
-                user_id,
-                page_url,
-                occurred_at,
-                event_date,
-                payload
-            )
-            ON target.event_id = source.event_id
-            WHEN NOT MATCHED THEN INSERT (
-                event_id,
-                event_name,
-                campaign_id,
-                user_id,
-                page_url,
-                occurred_at,
-                event_date,
-                payload
-            ) VALUES (
-                source.event_id,
-                source.event_name,
-                source.campaign_id,
-                source.user_id,
-                source.page_url,
-                source.occurred_at,
-                source.event_date,
-                source.payload
-            )
-            """
-        )
+def object_index_value(metadata: dict, processed_at: datetime) -> str:
+    return (
+        "("
+        f"{sql_string(metadata['object_key'])}, {sql_nullable_string(metadata.get('etag'))}, "
+        f"{sql_string(metadata['source_topic'])}, {sql_timestamp(metadata['last_modified'])}, "
+        f"{sql_timestamp(processed_at)}, {sql_date(processed_at)}, {sql_nullable_int(metadata.get('size'))}"
+        ")"
+    )
 
 
-def record_processed_bronze_objects(objects: list[dict]) -> None:
+def record_object_index_entries(objects: list[dict]) -> None:
     processed_at = datetime.now(timezone.utc)
     for batch in chunked(objects, 200):
-        values = ", ".join(processed_object_value(item, processed_at) for item in batch)
+        values = ", ".join(object_index_value(item, processed_at) for item in batch)
         trino_execute(
-            "INSERT INTO iceberg.ingress.processed_raw_event_objects "
-            "(object_key, etag, source_topic, last_modified, processed_at) VALUES "
+            "INSERT INTO iceberg.ingress.raw_object_index "
+            "(object_key, etag, source_topic, last_modified, processed_at, processed_date, size) VALUES "
             + values
         )
 
@@ -393,31 +358,27 @@ def publish_serving_tables(context: OpExecutionContext) -> None:
 
 
 @op(ins={"start": In(Nothing)})
-def sync_raw_events_to_lakehouse(context: OpExecutionContext) -> None:
-    with instrumented_op(context, "sync_raw_events_to_lakehouse"):
+def sync_object_metadata(context: OpExecutionContext) -> None:
+    with instrumented_op(context, "sync_object_metadata"):
         trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
         bronze_objects = list_unprocessed_bronze_objects()
         if not bronze_objects:
-            raw_event_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_events")
-            raw_event_count = int(raw_event_rows[0][0]) if raw_event_rows else 0
-            record_rows("iceberg_ingress_raw_events", raw_event_count)
-            log_event(context, "lakehouse_raw_events_synced", raw_event_rows=raw_event_count, processed_objects=0, inserted_events=0)
+            index_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_object_index")
+            index_count = int(index_rows[0][0]) if index_rows else 0
+            record_rows("iceberg_ingress_object_index", index_count)
+            log_event(context, "object_index_synced", object_rows=index_count, processed_objects=0)
             return
 
-        event_rows, inserted_event_count = load_bronze_event_payloads(bronze_objects)
-        if event_rows:
-            merge_bronze_events_into_iceberg(event_rows)
-        record_processed_bronze_objects(bronze_objects)
+        record_object_index_entries(bronze_objects)
 
-        raw_event_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_events")
-        raw_event_count = int(raw_event_rows[0][0]) if raw_event_rows else 0
-        record_rows("iceberg_ingress_raw_events", raw_event_count)
+        index_rows = trino_execute("SELECT count(*) FROM iceberg.ingress.raw_object_index")
+        index_count = int(index_rows[0][0]) if index_rows else 0
+        record_rows("iceberg_ingress_object_index", index_count)
         log_event(
             context,
-            "lakehouse_raw_events_synced",
-            raw_event_rows=raw_event_count,
+            "object_index_synced",
+            object_rows=index_count,
             processed_objects=len(bronze_objects),
-            inserted_events=inserted_event_count,
         )
 
 
@@ -426,7 +387,7 @@ def refresh_batch_and_serving() -> None:
     fetched = fetch_third_party_data()
     transformed = run_dbt_models(fetched)
     published = publish_serving_tables(transformed)
-    sync_raw_events_to_lakehouse(published)
+    # Object materialization is no longer automatic; object metadata is indexed separately.
 
 
 refresh_batch_and_serving_schedule = ScheduleDefinition(
@@ -447,7 +408,18 @@ def init_trino_catalogs_job() -> None:
     init_trino_ingress_catalogs()
 
 
+@job
+def sync_object_metadata_job() -> None:
+    sync_object_metadata()
+
+
+sync_object_metadata_schedule = ScheduleDefinition(
+    job=sync_object_metadata_job,
+    cron_schedule="0 * * * *",
+)
+
+
 defs = Definitions(
-    jobs=[refresh_batch_and_serving, init_trino_catalogs_job],
-    schedules=[refresh_batch_and_serving_schedule],
+    jobs=[refresh_batch_and_serving, init_trino_catalogs_job, sync_object_metadata_job],
+    schedules=[refresh_batch_and_serving_schedule, sync_object_metadata_schedule],
 )

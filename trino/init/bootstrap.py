@@ -80,9 +80,14 @@ def main() -> None:
     sql_file = Path(os.environ.get("TRINO_INIT_SQL", "/app/trino-init/01_ingress_catalogs.sql"))
     statements = read_sql_statements(sql_file)
     print(f"Executing {len(statements)} Trino bootstrap statements")
+    # Allow configuring longer retry behavior via environment for slow startups
+    attempts = int(os.environ.get("TRINO_BOOTSTRAP_ATTEMPTS", "120"))
+    delay = int(os.environ.get("TRINO_BOOTSTRAP_DELAY", "3"))
     retry(
         "trino bootstrap",
         lambda: [execute_trino(statement) for statement in statements],
+        attempts=attempts,
+        delay=delay,
     )
 
     mv_file = Path(os.environ.get("CLICKHOUSE_INIT_SQL", "/app/clickhouse-init/01_mv_parse_raw_payload.sql"))
@@ -92,6 +97,8 @@ def main() -> None:
         retry(
             f"clickhouse materialized view bootstrap statement {index}/{len(mv_statements)}",
             lambda statement=statement: execute_clickhouse(statement),
+            attempts=attempts,
+            delay=delay,
         )
 
 

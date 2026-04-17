@@ -128,12 +128,25 @@ The Go `platform` module now resolves observability dependencies that require Go
 
 - Raw streaming payloads land directly in MinIO under `bronze/email_events_raw` and `bronze/analytics_events_raw`.
 - The same payloads also land directly in ClickHouse table `serving.raw_payload`, and the materialized view in `clickhouse/init/01_mv_parse_raw_payload.sql` keeps `serving.raw_events` current for low-latency reads.
-- Dagster synchronizes new raw bronze objects from MinIO into `iceberg.ingress.raw_events` through Trino and records processed object keys in `iceberg.ingress.processed_raw_event_objects` so ClickHouse stays a serving projection rather than the Iceberg source of truth.
+- Dagster indexes MinIO bronze objects in `iceberg.ingress.raw_object_index`; Trino can read raw objects on-demand via the Hive table `hive.ingress.bronze_objects`.
 - dbt models live in `dagster/dbt` and run against PostgreSQL appdb as the transformation target.
 - Trino is configured with PostgreSQL, ClickHouse, and Iceberg catalogs. It stays on the read path for the platform and on the batch publication path for ClickHouse and Iceberg synchronization.
 - The platform app is built from `platform/` as a multi-stage container that embeds the Svelte bundle into the Go binary.
 - The platform bootstrap model now comes from the `analytics.platform_bootstrap` SQL view, backed by normalized tables seeded in [appdb/init/02_platform_bootstrap.sql](appdb/init/02_platform_bootstrap.sql) and live aggregate views in [appdb/init/03_platform_bootstrap_views.sql](appdb/init/03_platform_bootstrap_views.sql).
 - The current appdb seed can be exported as SQL `INSERT` statements with [appdb/queries/export_platform_seed.sql](appdb/queries/export_platform_seed.sql).
+
+### Hive catalog note
+
+Hive in this stack is the catalog layer for raw bronze files, not the main serving or transformation engine. In practice, the repo creates a Hive schema and an external table named hive.ingress.bronze_objects that points at the MinIO bronze prefix, so Trino can read those raw files on demand without first loading all of them into Iceberg. That wiring lives in trino/init/01_ingress_catalogs.sql and trino/catalog/hive.properties.
+
+The split in this project is: Iceberg stores the metadata-only object index, ClickHouse holds the low-latency serving tables, and Hive is the lightweight external-table mapping over the raw objects in storage. 
+
+This repository configures the `hive` catalog on Trino 468 to use a Hadoop-backed file system (`fs.hadoop.enabled=true`) together
+with legacy `hive.s3.*` MinIO settings. Trino 468 does not reliably support mixing the native S3 file system and a local file-based
+metastore in the same catalog, so Hadoop mode lets the file metastore read the local catalog directory while the legacy
+`hive.s3.*` settings provide access to `s3://` external locations on MinIO. When upgrading Trino, revisit this configuration and
+prefer the native S3 file system options (`fs.native-s3.enabled` / `s3.*`) available in newer releases.
+
 
 ## Applying ClickHouse materialized view (local)
 
