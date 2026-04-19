@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from errno import EADDRINUSE
 from contextlib import contextmanager
 
 from opentelemetry import trace
@@ -48,7 +49,11 @@ def setup_telemetry() -> None:
 
         metrics_port = os.getenv("DAGSTER_METRICS_PORT", "").strip()
         if metrics_port:
-            start_http_server(int(metrics_port))
+            try:
+                start_http_server(int(metrics_port))
+            except OSError as exc:
+                if exc.errno != EADDRINUSE:
+                    raise
 
         endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").rstrip("/")
         if endpoint:

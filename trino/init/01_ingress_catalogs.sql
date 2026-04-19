@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS clickhouse.serving.raw_events (
     event_name VARCHAR,
     campaign_id VARCHAR,
     user_id VARCHAR,
-    occurred_at TIMESTAMP(0),
+    occurred_at TIMESTAMP(0) NOT NULL,
     payload VARCHAR
 )
 WITH (
@@ -71,7 +71,7 @@ WITH (
 );
 
 CREATE TABLE IF NOT EXISTS clickhouse.serving.campaign_performance (
-    campaign_id VARCHAR,
+    campaign_id VARCHAR NOT NULL,
     delivered_events BIGINT,
     open_events BIGINT,
     click_events BIGINT,

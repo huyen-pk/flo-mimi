@@ -8,13 +8,10 @@ from datetime import datetime, timezone
 import boto3
 import psycopg
 import requests
-from dagster import Definitions, In, Nothing, OpExecutionContext, ScheduleDefinition, job, op
+from dagster import Definitions, In, Nothing, OpExecutionContext, Out, ScheduleDefinition, job, op
 from psycopg.types.json import Jsonb
 
-from telemetry import instrumented_op, log_event, record_dbt_run, record_rows, setup_telemetry
-
-
-setup_telemetry()
+from telemetry import instrumented_op, log_event, record_dbt_run, record_rows
 
 
 class TrinoError(RuntimeError):
@@ -209,7 +206,7 @@ def record_object_index_entries(objects: list[dict]) -> None:
         )
 
 
-@op(out=Nothing)
+@op(out=Out(Nothing))
 def fetch_third_party_data(context: OpExecutionContext) -> None:
     with instrumented_op(context, "fetch_third_party_data"):
         trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")
@@ -396,7 +393,7 @@ refresh_batch_and_serving_schedule = ScheduleDefinition(
 )
 
 
-@op(out=Nothing)
+@op(out=Out(Nothing))
 def init_trino_ingress_catalogs(context: OpExecutionContext) -> None:
     with instrumented_op(context, "init_trino_ingress_catalogs"):
         trino_execute_file(Path(os.environ["TRINO_INIT_DIR"]) / "01_ingress_catalogs.sql")

@@ -7,14 +7,35 @@ import urllib.request
 from pathlib import Path
 
 
+def trino_base_url() -> str:
+    return f"http://{os.environ.get('TRINO_HOST', 'trino')}:{os.environ.get('TRINO_PORT', '8080')}"
+
+
+def trino_headers() -> dict[str, str]:
+    return {
+        "X-Trino-User": os.environ.get("TRINO_USER", "lakehouse-init"),
+        "X-Trino-Source": "lakehouse-init",
+    }
+
+
+def ensure_trino_ready() -> None:
+    request = urllib.request.Request(
+        url=f"{trino_base_url()}/v1/info",
+        headers=trino_headers(),
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.load(response)
+
+    if payload.get("starting", True):
+        raise RuntimeError("Trino server is still initializing")
+
+
 def execute_trino(sql: str) -> None:
     request = urllib.request.Request(
-        url=f"http://{os.environ.get('TRINO_HOST', 'trino')}:{os.environ.get('TRINO_PORT', '8080')}/v1/statement",
+        url=f"{trino_base_url()}/v1/statement",
         data=sql.encode("utf-8"),
-        headers={
-            "X-Trino-User": os.environ.get("TRINO_USER", "lakehouse-init"),
-            "X-Trino-Source": "lakehouse-init",
-        },
+        headers=trino_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=30) as response:
@@ -28,10 +49,7 @@ def execute_trino(sql: str) -> None:
             return
         next_request = urllib.request.Request(
             url=next_uri,
-            headers={
-                "X-Trino-User": os.environ.get("TRINO_USER", "lakehouse-init"),
-                "X-Trino-Source": "lakehouse-init",
-            },
+            headers=trino_headers(),
             method="GET",
         )
         with urllib.request.urlopen(next_request, timeout=30) as response:
@@ -63,7 +81,7 @@ def execute_clickhouse(sql: str) -> None:
         response.read()
 
 
-def retry(name: str, action, attempts: int = 30, delay: int = 2) -> None:
+def retry(name: str, action, attempts: int = 3, delay: int = 2) -> None:
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
@@ -71,35 +89,45 @@ def retry(name: str, action, attempts: int = 30, delay: int = 2) -> None:
             return
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            print(f"{name} attempt {attempt}/{attempts} failed: {exc}")
-            time.sleep(delay)
+            print(f"{name} attempt {attempt}/{attempts} failed: {exc}", flush=True)
+            if attempt < attempts:
+                time.sleep(delay)
     raise RuntimeError(f"{name} failed after {attempts} attempts") from last_error
 
 
 def main() -> None:
     sql_file = Path(os.environ.get("TRINO_INIT_SQL", "/app/trino-init/01_ingress_catalogs.sql"))
     statements = read_sql_statements(sql_file)
-    print(f"Executing {len(statements)} Trino bootstrap statements")
+    print(f"Executing {len(statements)} Trino bootstrap statements", flush=True)
     # Allow configuring longer retry behavior via environment for slow startups
-    attempts = int(os.environ.get("TRINO_BOOTSTRAP_ATTEMPTS", "120"))
+    attempts = int(os.environ.get("TRINO_BOOTSTRAP_ATTEMPTS", "3"))
     delay = int(os.environ.get("TRINO_BOOTSTRAP_DELAY", "3"))
-    retry(
-        "trino bootstrap",
-        lambda: [execute_trino(statement) for statement in statements],
-        attempts=attempts,
-        delay=delay,
-    )
+    retry("trino readiness", ensure_trino_ready, attempts=attempts, delay=delay)
+    for index, statement in enumerate(statements, start=1):
+        print(f"Running Trino bootstrap statement {index}/{len(statements)}", flush=True)
+        retry(
+            f"trino bootstrap statement {index}/{len(statements)}",
+            lambda statement=statement: execute_trino(statement),
+            attempts=attempts,
+            delay=delay,
+        )
+    print("Trino bootstrap complete", flush=True)
 
     mv_file = Path(os.environ.get("CLICKHOUSE_INIT_SQL", "/app/clickhouse-init/01_mv_parse_raw_payload.sql"))
     mv_statements = read_sql_statements(mv_file)
-    print(f"Executing {len(mv_statements)} ClickHouse bootstrap statements")
+    print(f"Executing {len(mv_statements)} ClickHouse bootstrap statements", flush=True)
     for index, statement in enumerate(mv_statements, start=1):
+        print(
+            f"Running ClickHouse bootstrap statement {index}/{len(mv_statements)}",
+            flush=True,
+        )
         retry(
             f"clickhouse materialized view bootstrap statement {index}/{len(mv_statements)}",
             lambda statement=statement: execute_clickhouse(statement),
             attempts=attempts,
             delay=delay,
         )
+    print("ClickHouse bootstrap complete", flush=True)
 
 
 if __name__ == "__main__":

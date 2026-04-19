@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from threading import Lock
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -45,6 +46,10 @@ KAFKA_PUBLISH_DURATION = Histogram(
     ["service", "topic"],
 )
 
+# track last seen status per route to detect transitions
+_route_last_status: dict = {}
+_route_last_status_lock = Lock()
+
 
 def configure_app(app: FastAPI, service_name: str) -> logging.Logger:
     logger = _configure_logging(service_name)
@@ -73,21 +78,41 @@ def configure_app(app: FastAPI, service_name: str) -> logging.Logger:
             HTTP_REQUESTS_TOTAL.labels(service_name, request.method, route, str(status_code)).inc()
             HTTP_REQUEST_DURATION.labels(service_name, request.method, route).observe(duration)
             HTTP_INFLIGHT.labels(service=service_name).dec()
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "http_request",
-                        "service": service_name,
-                        "method": request.method,
-                        "path": request.url.path,
-                        "route": route,
-                        "status": status_code,
-                        "duration_ms": round(duration * 1000, 2),
-                        "correlation_id": correlation_id,
-                        "trace_id": current_trace_id(),
-                    }
+
+            should_log = False
+            # always log server failures
+            if status_code >= 500:
+                should_log = True
+            else:
+                # log when status for this route transitions from previously observed status
+                try:
+                    with _route_last_status_lock:
+                        prev = _route_last_status.get(route)
+                        if prev is not None and prev != status_code:
+                            should_log = True
+                        # update last seen status for route
+                        _route_last_status[route] = status_code
+                except Exception:
+                    # on any locking error, default to logging to avoid silent drops
+                    should_log = True
+
+            if should_log:
+                logger.info(
+                    json.dumps(
+                        {
+                            "event": "http_request",
+                            "service": service_name,
+                            "method": request.method,
+                            "path": request.url.path,
+                            "route": route,
+                            "status": status_code,
+                            "duration_ms": round(duration * 1000, 2),
+                            "correlation_id": correlation_id,
+                            "trace_id": current_trace_id(),
+                        }
+                    )
                 )
-            )
+
             _correlation_id_ctx.reset(token)
 
     return logger

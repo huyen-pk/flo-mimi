@@ -13,7 +13,9 @@ SELECT
      JSONExtractString(payload,'event_name')) AS event_name,
   JSONExtractString(payload,'campaign_id') AS campaign_id,
   JSONExtractString(payload,'user_id') AS user_id,
-  parseDateTimeBestEffort(JSONExtractString(payload,'occurred_at')) AS occurred_at,
+  if(match(JSONExtractString(payload,'occurred_at'), '^[0-9]{4}-[0-9]{2}-[0-9]{2}'),
+    parseDateTimeBestEffort(JSONExtractString(payload,'occurred_at')),
+    toDateTime('1970-01-01 00:00:00')) AS occurred_at,
   payload
 FROM serving.raw_payload;
 

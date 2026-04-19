@@ -57,6 +57,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    # Persist MinIO object data so Redpanda Connect sinks remain durable
     volumes:
       - minio_data:/data
     networks:
@@ -101,6 +102,36 @@ services:
       - serving_net
       - batch_net
       - lakehouse_net
+
+  appdb-init:
+    image: postgres:16-alpine
+    depends_on:
+      appdb:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${APPDB_PASSWORD:-analytics}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        for file in \
+          /docker-entrypoint-initdb.d/01_init.sql \
+          /docker-entrypoint-initdb.d/02a_reconcile_platform_analytics.sql \
+          /docker-entrypoint-initdb.d/02_platform_bootstrap.sql \
+          /docker-entrypoint-initdb.d/03_platform_bootstrap_views.sql; do
+          psql \
+            --host=appdb \
+            --username=${APPDB_USER:-analytics} \
+            --dbname=${APPDB_DB:-analytics} \
+            --file="$$file" \
+            --set=ON_ERROR_STOP=1
+        done
+    restart: "no"
+    volumes:
+      - ./appdb/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - serving_net
 
   catalog-db:
     image: postgres:16-alpine
@@ -152,6 +183,15 @@ services:
       CLICKHOUSE_DB: serving
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user ${CLICKHOUSE_USER:-default} --password ${CLICKHOUSE_PASSWORD:-clickhouse} --query 'SELECT 1' >/dev/null || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     networks:
@@ -163,18 +203,22 @@ services:
     image: trinodb/trino:468
     user: root
     depends_on:
-      appdb:
-        condition: service_healthy
+      appdb-init:
+        condition: service_completed_successfully
       catalog-db-init:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info >/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:8080/v1/info | grep -Eq '\"starting\":[[:space:]]*false' || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -195,6 +239,8 @@ services:
       - ./trino/node.properties:/etc/trino/node.properties:ro
       - ./trino/catalog:/etc/trino/catalog:ro
       - ./trino/plugin/postgresql/postgresql.jar:/usr/lib/trino/plugin/iceberg/postgresql.jar:ro
+      - trino_metastore_data:/var/lib/trino
+      - trino_node_data:/var/trino
     networks:
       - lakehouse_net
       - serving_net
@@ -219,8 +265,8 @@ services:
       trino:
         condition: service_healthy
       clickhouse:
-        condition: service_started
-    command: ["python", "/app/trino-init/bootstrap.py"]
+        condition: service_healthy
+    command: ["python", "-u", "/app/trino-init/bootstrap.py"]
     restart: "no"
     volumes:
       - ./trino/init:/app/trino-init:ro
@@ -268,8 +314,8 @@ services:
     depends_on:
       event-gateway:
         condition: service_healthy
-      appdb:
-        condition: service_healthy
+      appdb-init:
+        condition: service_completed_successfully
     ports:
       - "8081:8081"
     healthcheck:
@@ -351,17 +397,21 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
-      appdb:
-        condition: service_healthy
       trino:
         condition: service_healthy
       mock-third-party-api:
         condition: service_healthy
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/')\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     volumes:
-      - dagster_home:/opt/dagster/dagster_home
       - ./trino/init:/opt/dagster/app/trino-init:ro
+      - ./dagster/dagster.yaml:/opt/dagster/dagster_home/dagster.yaml:ro
+      - dagster_home:/opt/dagster/dagster_home
     networks:
       - batch_net
       - lakehouse_net
@@ -396,10 +446,11 @@ services:
       OTEL_SERVICE_NAME: dagster-daemon
     depends_on:
       dagster-webserver:
-        condition: service_started
+        condition: service_healthy
     volumes:
-      - dagster_home:/opt/dagster/dagster_home
       - ./trino/init:/opt/dagster/app/trino-init:ro
+      - ./dagster/dagster.yaml:/opt/dagster/dagster_home/dagster.yaml:ro
+      - dagster_home:/opt/dagster/dagster_home
     networks:
       - batch_net
       - lakehouse_net
@@ -418,8 +469,8 @@ services:
       DBT_PASSWORD: ${APPDB_PASSWORD:-analytics}
       DBT_SCHEMA: analytics
     depends_on:
-      appdb:
-        condition: service_healthy
+      appdb-init:
+        condition: service_completed_successfully
     networks:
       - lakehouse_net
       - serving_net
@@ -461,6 +512,8 @@ services:
   grafana:
     image: grafana/grafana:11.2.2
     depends_on:
+      appdb:
+        condition: service_healthy
       prometheus:
         condition: service_started
       loki:
@@ -471,6 +524,11 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: appdb:5432
+      GF_DATABASE_NAME: ${APPDB_DB:-analytics}
+      GF_DATABASE_USER: ${APPDB_USER:-analytics}
+      GF_DATABASE_PASSWORD: ${APPDB_PASSWORD:-analytics}
     ports:
       - "3001:3000"
     volumes:
@@ -479,6 +537,7 @@ services:
       - grafana_data:/var/lib/grafana
     networks:
       - observability_net
+      - serving_net
 
   loki:
     image: grafana/loki:3.1.1
@@ -541,6 +600,8 @@ volumes:
   appdb_data:
   catalog_data:
   clickhouse_data:
+  trino_metastore_data:
+  trino_node_data:
   dagster_home:
   prometheus_data:
   grafana_data:

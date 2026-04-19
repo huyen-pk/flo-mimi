@@ -16,4 +16,7 @@ ENV DAGSTER_HOME=/opt/dagster/dagster_home
 
 RUN mkdir -p /opt/dagster/dagster_home
 
-CMD ["dagster", "--version"]
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

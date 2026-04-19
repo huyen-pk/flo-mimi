@@ -73,6 +73,12 @@ var (
 	)
 )
 
+// track last seen status per route to detect transitions
+var (
+	routeLastStatus     = map[string]int{}
+	routeLastStatusLock sync.Mutex
+)
+
 func init() {
 	registerMetrics.Do(func() {
 		prometheus.MustRegister(
@@ -184,22 +190,38 @@ func WrapHTTP(service string, logger *slog.Logger, next http.Handler) http.Handl
 
 		route := normalizeRoute(request.URL.Path)
 		status := strconv.Itoa(statusWriter.status)
+		statusInt := statusWriter.status
 		duration := time.Since(startedAt)
 
 		httpRequestsTotal.WithLabelValues(service, request.Method, route, status).Inc()
 		httpRequestDuration.WithLabelValues(service, request.Method, route).Observe(duration.Seconds())
 
-		fields := []any{
-			"method", request.Method,
-			"path", request.URL.Path,
-			"status", statusWriter.status,
-			"duration_ms", duration.Milliseconds(),
-			"correlation_id", correlationID,
+		shouldLog := false
+		if statusInt >= http.StatusInternalServerError {
+			shouldLog = true
+		} else {
+			routeLastStatusLock.Lock()
+			prev, ok := routeLastStatus[route]
+			if ok && prev != statusInt {
+				shouldLog = true
+			}
+			routeLastStatus[route] = statusInt
+			routeLastStatusLock.Unlock()
 		}
-		if spanContext := trace.SpanContextFromContext(request.Context()); spanContext.IsValid() {
-			fields = append(fields, "trace_id", spanContext.TraceID().String())
+
+		if shouldLog {
+			fields := []any{
+				"method", request.Method,
+				"path", request.URL.Path,
+				"status", statusWriter.status,
+				"duration_ms", duration.Milliseconds(),
+				"correlation_id", correlationID,
+			}
+			if spanContext := trace.SpanContextFromContext(request.Context()); spanContext.IsValid() {
+				fields = append(fields, "trace_id", spanContext.TraceID().String())
+			}
+			logger.Info("http request", fields...)
 		}
-		logger.Info("http request", fields...)
 	})
 }
 

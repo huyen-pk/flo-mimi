@@ -15,3 +15,8 @@ scheduler:
 run_coordinator:
   module: dagster._core.run_coordinator
   class: DefaultRunCoordinator
+
+run_launcher:
+  module: dagster._core.launcher
+  class: DefaultRunLauncher
+  config: {}

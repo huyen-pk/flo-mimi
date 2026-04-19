@@ -9,8 +9,8 @@ metrics:
   prometheus: {}
 
 input:
+  label: raw_events_input
   kafka_franz:
-    label: raw_events_input
     seed_brokers:
       - redpanda:9092
     topics:
@@ -44,4 +44,3 @@ output:
             count: 1
         processors:
           - bloblang: 'root = {"payload": content()}'
- 

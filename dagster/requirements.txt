@@ -1,5 +1,5 @@
-dagster==1.10.5
-dagster-webserver==1.10.5
+dagster
+dagster-webserver
 boto3==1.37.38
 dbt-core==1.9.0
 dbt-postgres==1.9.0
