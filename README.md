@@ -270,6 +270,7 @@ The stack now includes a local observability baseline in `observability/`:
 - `Tempo` stores traces emitted by the instrumented Go and Python services through the OpenTelemetry Collector.
 - `OpenTelemetry Collector` receives OTLP traces from `platform`, `event-gateway`, `mock-third-party-api`, and the Dagster processes.
 
+- `Logging recommendations`: [observability/LOGGING_RECOMMENDATION.md](observability/RECOMMENDATION.md) — guidance for tiered logging, tracing, sampling, and retention at scale.
 Custom service telemetry behavior:
 
 - `platform`, `event-gateway`, and `mock-third-party-api` expose `/metrics`.
