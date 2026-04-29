@@ -88,3 +88,4 @@ go.work.sum
 install-skills.sh
 skills-lock.json
 *.log
+config_output.txt

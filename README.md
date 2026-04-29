@@ -64,7 +64,6 @@ These mounts are shared as inputs, not as mutable storage:
 
 ### Host-Level Mounts
 
-- `promtail` mounts `/var/run/docker.sock` read-only for Docker service discovery.
 - `promtail` mounts `/var/lib/docker/containers` read-only to tail container JSON logs.
 
 These host mounts are intentionally outside Compose-managed volume lifecycle and are not deleted by cleanup commands.
@@ -269,6 +268,13 @@ The stack now includes a local observability baseline in `observability/`:
 - `Loki` stores container and application logs collected by `promtail`.
 - `Tempo` stores traces emitted by the instrumented Go and Python services through the OpenTelemetry Collector.
 - `OpenTelemetry Collector` receives OTLP traces from `platform`, `event-gateway`, `mock-third-party-api`, and the Dagster processes.
+
+Note about Docker socket access:
+
+- `promtail` may be configured to use Docker service discovery via the Docker socket (`/var/run/docker.sock`) to obtain container metadata. Mounting the socket into a container grants broad control over the Docker daemon and is a significant host-level security risk.
+- To avoid exposing the socket, remove the `/var/run/docker.sock` bind from the `promtail` service in `docker-compose.yml` and use file-based scraping. The current repo supports this: `observability/promtail/config.yml` can use `static_configs` with `__path__` set to `/var/lib/docker/containers/*/*-json.log` so Promtail tails container log files without Docker API access.
+- If you need container metadata but want to reduce risk, run Promtail on the host or put a `docker-socket-proxy` in front of the socket to limit allowed API calls.
+
 
 - `Logging recommendations`: [observability/LOGGING_RECOMMENDATION.md](observability/RECOMMENDATION.md) — guidance for tiered logging, tracing, sampling, and retention at scale.
 Custom service telemetry behavior:
